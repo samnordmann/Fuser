@@ -1,10 +1,7 @@
 #pragma once
-#ifdef USE_DISTRIBUTED
 
 #include <multidevice/multidevice.h>
-#include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
-#include <torch/csrc/distributed/c10d/Store.hpp>
-#include <torch/csrc/distributed/c10d/TCPStore.hpp>
+#include <torch/csrc/distributed/c10d/Backend.hpp>
 
 namespace nvfuser {
 
@@ -60,9 +57,7 @@ class Communicator {
       int tag = 0);
 
   // performs a barrier in the communicator
-  void barrier() const {
-    pg_->barrier();
-  }
+  void barrier() const;
 
   // stores the process group backend
  private:
@@ -74,5 +69,3 @@ class Communicator {
 };
 
 } // namespace nvfuser
-
-#endif

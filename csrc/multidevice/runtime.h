@@ -5,7 +5,6 @@
  * SPDX-License-Identifier: BSD-3-Clause
  */
 // clang-format on
-#ifdef USE_DISTRIBUTED
 #pragma once
 
 #include <c10/core/DeviceType.h>
@@ -80,5 +79,3 @@ class TORCH_CUDA_CU_API MultiDeviceRuntime {
 };
 
 } // namespace nvfuser
-
-#endif

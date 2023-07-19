@@ -6,6 +6,7 @@
  */
 // clang-format on
 #ifdef USE_DISTRIBUTED
+#include <torch/csrc/distributed/c10d/TCPStore.hpp>
 
 #include <multidevice/communicator.h>
 #ifdef USE_C10D_GLOO
@@ -134,6 +135,10 @@ void Communicator::sendRecv(
         pg_->recv(tensor, sender_rank, tag)->wait(),
         "error during communication");
   }
+}
+
+void Communicator::barrier() const {
+  pg_->barrier()->wait();
 }
 
 } // namespace nvfuser
