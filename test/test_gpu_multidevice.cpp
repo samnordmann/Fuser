@@ -47,9 +47,6 @@ namespace nvfuser {
 using namespace torch::jit::fuser::cuda;
 using namespace at::indexing;
 
-// We create the communicator globally for all the tests
-Communicator comm;
-
 // Send a possibly sharded tensor represented by a PipelineVal
 // to one "tester" device
 void SendToTester(

@@ -15,6 +15,7 @@
 #include <ir/all_nodes.h>
 #include <kernel_cache.h>
 #include <kernel_ir_dispatch.h>
+#include <multidevice/communicator.h>
 #include <transform_replay.h>
 
 #include <ATen/Context.h>
@@ -424,6 +425,8 @@ class NVFuserTest : public ::testing::Test {
 
     at::manual_seed(0);
   }
+
+  static Communicator comm;
 };
 
 // assert that the given fusion lowers to the given CUDA kernel
