@@ -59,11 +59,15 @@ void SendToTester(
     Communicator& comm) {
   std::vector<at::Tensor> buffer;
   auto& mesh = pVal->getStage()->descriptor()->mesh;
-  if (isParallelTypeDeviceDim(pVal->getOriginalVal()
-                                  ->as<TensorView>()
-                                  ->getRootDomain()
-                                  .at(0)
-                                  ->getParallelType())) {
+  //check if the tv is sharded accross devices
+  if (pVal->getOriginalVal()->as<TensorView>()->axis(0)->isDevice()) {
+    // If needed, we first do a local copy at the tester of a slice of the tensor
+    auto it = std::find(mesh.vector().begin(), mesh.vector().end(), tester);
+    if (it != mesh.vector().end() && comm.deviceId() == tester) {
+      auto i = std::distance(mesh.vector().begin(), it);
+      tensor.select(0, i) = tensor.select(0, 0);
+    }
+    // We send/recv to the tester all the tensor slices
     for (DeviceIdxType j : c10::irange(mesh.vector().size())) {
       buffer = {tensor.index({comm.deviceId() == tester ? j : 0, "..."})};
       auto sender = mesh.vector().at(j);
@@ -72,6 +76,7 @@ void SendToTester(
       }
     }
   } else {
+    // If the tensor is not sharded, we send/recv the whole buffer
     buffer = {tensor};
     auto sender = mesh.vector().at(0);
     if (tester != sender && (comm.deviceId() == sender || comm.deviceId() == tester)) {
@@ -88,7 +93,7 @@ void testValidateMultidevice(
     MultiDeviceRuntime& runtime,
     const at::ArrayRef<c10::IValue>& inputs,
     const std::vector<at::Tensor>& outputs,
-    bool print = false,
+    bool print,
     DeviceIdxType tester = 1,
     bool validate = true,
     bool set_mem_type_to_global = true,
@@ -166,18 +171,6 @@ void testValidateMultidevice(
     for (auto i : c10::irange(outputs.size())) {
       auto obtained = outputs.at(i);
       auto ref = ref_outputs.at(i);
-      bool is_output_sharded = isParallelTypeDeviceDim(
-            fusion
-            .outputs()
-            .at(i)
-            ->as<TensorView>()
-            ->getRootDomain()
-            .at(0)
-            ->getParallelType());
-      if (is_output_sharded) {
-        obtained = obtained.index({0, "..."});
-        ref = ref.index({0, "..."});
-      }
       TORCH_INTERNAL_ASSERT(
         obtained.allclose(ref, 1e-2),
         // obtained.equal(ref),
@@ -198,7 +191,7 @@ void executeAndTestPipeline(
     Pipeline& pipeline,
     Communicator& comm,
     std::vector<c10::IValue>& inputs,
-    bool print = true) {
+    bool print = false) {
   if (print && !comm.deviceId()) {
     fusion_ptr->printKernel();
     std::cout << pipeline.toString() << std::endl;
@@ -549,20 +542,23 @@ TEST_F(MultiDeviceTest, Pipeline_Scatter) {
   Fusion& fusion = *fusion_ptr.get();
   FusionGuard fg(&fusion);
 
-  TensorView* tv0 = makeContigTensor(2);
+  TensorView* tv0 = makeContigTensor(4);
   fusion.addInput(tv0);
-  TensorView* tv1 = set(tv0);
-  fusion.addOutput(tv1);
+  TensorView* tv1 = sum(tv0, {1});
+  TensorView* tv2 = set(tv1);
+  TensorView* tv3 = sum(tv2, {1});
+  fusion.addOutput(tv3);
 
-  tv1->axis(0)->parallelize(ParallelType::DIDx);
+  tv2->axis(0)->parallelize(ParallelType::DIDx);
+  tv3->axis(0)->parallelize(ParallelType::DIDx);
 
   PipelineStageDescriptor stage0, stage1;
-  stage0.addVal({tv0});
-  stage1.addVal({tv1});
+  stage0.addVal({tv0, tv1});
+  stage1.addVal({tv2, tv3});
   stage0.mesh = {0};
-  stage0.auto_schedule = true;
+  stage0.auto_schedule = false;
   stage1.mesh = {0, 1, 2, 3};
-  stage1.auto_schedule = true;
+  stage1.auto_schedule = false;
 
   PipelineDescriptor descriptor{
       .stage_descriptors{std::move(stage0), std::move(stage1)}};
@@ -571,7 +567,7 @@ TEST_F(MultiDeviceTest, Pipeline_Scatter) {
 
   c10::TensorOptions options =
       at::TensorOptions().dtype(at::kFloat).device(comm.device());
-  std::vector<c10::IValue> inputs{at::ones({4, 5}, options) * comm.deviceId()};
+  std::vector<c10::IValue> inputs{at::ones({4, 5, 6, 7}, options) * comm.deviceId()};
 
   executeAndTestPipeline(std::move(fusion_ptr), pipeline, comm, inputs);
 }
