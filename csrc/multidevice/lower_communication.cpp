@@ -68,7 +68,8 @@ CommParams CreateParamsForGatherScatter(
   }
 
   if (mesh.has(device_index)) {
-    ((is_scatter)? params.dst_bufs : params.src_bufs) = {buf.index({0, "..."})};
+    auto sliced_buf = buf.index({0, "..."});
+    ((is_scatter)? params.dst_bufs : params.src_bufs) = {sliced_buf};
   }
 
   if (device_index == root) {
