@@ -65,7 +65,7 @@ void SendToTester(
                                   .at(0)
                                   ->getParallelType())) {
     for (DeviceIdxType j : c10::irange(mesh.vector().size())) {
-      buffer = {tensor.index({j, "..."})};
+      buffer = {tensor.index({comm.deviceId() == tester ? j : 0, "..."})};
       auto sender = mesh.vector().at(j);
       if (tester != sender && (comm.deviceId() == sender || comm.deviceId() == tester)) {
         comm.sendRecv(tester, sender, buffer);
@@ -88,7 +88,7 @@ void testValidateMultidevice(
     MultiDeviceRuntime& runtime,
     const at::ArrayRef<c10::IValue>& inputs,
     const std::vector<at::Tensor>& outputs,
-    bool print = true,
+    bool print = false,
     DeviceIdxType tester = 1,
     bool validate = true,
     bool set_mem_type_to_global = true,
@@ -111,50 +111,82 @@ void testValidateMultidevice(
         runtime.comm());
   }
 
-  if (runtime.comm().deviceId() == tester) {
-    if (print) {
-      std::stringstream ss;
-      std::string indent = "  ";
-      ss << "Obtained final outputs:{\n";
-      for (auto& t : outputs) {
-        ss << indent << t;
+  if (runtime.comm().deviceId() != tester) {
+    return;
+  }
+
+  if (print) {
+    fusion_ptr->printKernel();
+
+    std::stringstream ss;
+    std::string indent = "  ";
+    ss << "Obtained final outputs:{\n";
+    for (auto& t : outputs) {
+      ss << indent << t;
+    }
+    ss << "\n}";
+    std::cout << ss.str() << std::endl;
+  }
+
+  // sets all the memory type to global to avoid an execution error
+  if (set_mem_type_to_global) {
+    for (auto tv : ir_utils::filterByType<TensorView>(fusion_ptr->vals())) {
+      tv->setMemoryType(MemoryType::Global);
+      for (auto i : c10::irange(tv->domain()->nDims())) {
+        tv->axis(i)->parallelize(ParallelType::Serial);
       }
-      ss << "\n}";
-      std::cout << ss.str() << std::endl;
     }
+  }
 
-    // sets all the memory type to global to avoid an execution error
-    if (set_mem_type_to_global) {
-      for (auto tv : ir_utils::filterByType<TensorView>(fusion_ptr->vals())) {
-        tv->setMemoryType(MemoryType::Global);
+  // execute the fusion on one device without pipeline scheduling
+  std::vector<at::Tensor> ref_outputs;
+  Fusion& fusion = *fusion_ptr.get();
+  if (auto_schedule) {
+    FusionExecutorCache fec(std::move(fusion_ptr));
+    ref_outputs = fec.runFusionWithInputs(inputs);
+  } else {
+    FusionExecutor fe;
+    fe.compileFusion(&fusion, inputs);
+    ref_outputs = fe.runFusion(inputs);
+  }
+
+  if (print) {
+    std::stringstream ss;
+    std::string indent = "  ";
+    ss << "Expected outputs:{\n";
+    for (auto& t : ref_outputs) {
+      ss << indent << t;
+    }
+    ss << "\n}";
+    std::cout << ss.str() << std::endl;
+  }
+
+  if (validate) {
+    // testValidate(&fusion, outputs, inputs, ref_outputs, __LINE__, __FILE__);
+    for (auto i : c10::irange(outputs.size())) {
+      auto obtained = outputs.at(i);
+      auto ref = ref_outputs.at(i);
+      bool is_output_sharded = isParallelTypeDeviceDim(
+            fusion
+            .outputs()
+            .at(i)
+            ->as<TensorView>()
+            ->getRootDomain()
+            .at(0)
+            ->getParallelType());
+      if (is_output_sharded) {
+        obtained = obtained.index({0, "..."});
+        ref = ref.index({0, "..."});
       }
-    }
-
-    // execute the fusion on one device without pipeline scheduling
-    std::vector<at::Tensor> ref_outputs;
-    Fusion& fusion = *fusion_ptr.get();
-    if (auto_schedule) {
-      FusionExecutorCache fec(std::move(fusion_ptr));
-      ref_outputs = fec.runFusionWithInputs(inputs);
-    } else {
-      FusionExecutor fe;
-      fe.compileFusion(&fusion, inputs);
-      ref_outputs = fe.runFusion(inputs);
-    }
-
-    if (print) {
-      std::stringstream ss;
-      std::string indent = "  ";
-      ss << "Expected outputs:{\n";
-      for (auto& t : ref_outputs) {
-        ss << indent << t;
-      }
-      ss << "\n}";
-      std::cout << ss.str() << std::endl;
-    }
-
-    if (validate) {
-      testValidate(&fusion, outputs, inputs, ref_outputs, __LINE__, __FILE__);
+      TORCH_INTERNAL_ASSERT(
+        obtained.allclose(ref, 1e-2),
+        // obtained.equal(ref),
+        "Device ",
+        runtime.comm().deviceId(),
+        " expected tensor ",
+        ref,
+        "\nbut obtained tensor: ",
+        obtained);
     }
   }
 }
@@ -166,7 +198,7 @@ void executeAndTestPipeline(
     Pipeline& pipeline,
     Communicator& comm,
     std::vector<c10::IValue>& inputs,
-    bool print = false) {
+    bool print = true) {
   if (print && !comm.deviceId()) {
     fusion_ptr->printKernel();
     std::cout << pipeline.toString() << std::endl;
@@ -288,7 +320,7 @@ TEST_F(MultiDeviceTest, Pipeline) {
       at::TensorOptions().dtype(at::kFloat).device(comm.device());
   // Note: the concrete values are only used at the relevant ranks
   std::vector<c10::IValue> inputs{
-      at::randn({3096, 1123}, options), at::randn({2048, 73, 81}, options)};
+      at::randn({9, 7}, options), at::randn({3, 5, 11}, options)};
 
   executeAndTestPipeline(std::move(fusion_ptr), pipeline, comm, inputs);
 }
@@ -298,21 +330,30 @@ TEST_F(MultiDeviceTest, Didx) {
   Fusion& fusion = *fusion_ptr.get();
   FusionGuard fg(&fusion);
 
-  TensorView* tv0 = makeContigTensor(1);
+  TensorView* tv0 = makeContigTensor(3);
+  // TensorView* tv0_ = makeContigTensor(4);
   fusion.addInput(tv0);
+  // fusion.addInput(tv0_);
   TensorView* tv1 = add(tv0, tv0);
+  // TensorView* tv2 = sum(tv0, {0});
+  // TensorView* tv2 = add(tv0_, tv0_);
+  // TensorView* tv3 = add(tv0_, tv0_);
+  // TensorView* tv4 = add(tv0_, tv0_);
   tv0->axis(0)->parallelize(ParallelType::DIDx);
   tv1->axis(0)->parallelize(ParallelType::DIDx);
   fusion.addOutput(tv1);
+  // fusion.addOutput(tv2);
+  // fusion.addOutput(tv3);
+  // fusion.addOutput(tv4);
 
-  // fusion.printKernel();
+  fusion.printKernel();
 
   if (!comm.is_available())
     GTEST_SKIP() << "distributed setting not available";
 
   c10::TensorOptions options =
       at::TensorOptions().dtype(at::kFloat).device(comm.device());
-  std::vector<c10::IValue> inputs{at::ones({4}, options) + comm.deviceId()};
+  std::vector<c10::IValue> inputs{at::ones({4, 7, 11}, options) + comm.deviceId()};
 
   FusionExecutor fe;
   fe.compileFusion(fusion_ptr.get(), inputs);

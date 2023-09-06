@@ -38,15 +38,6 @@ class DeviceMesh final {
     return std::find(vector_.begin(), vector_.end(), device) != vector_.end();
   }
 
-  // returns the index (or position) of a device that has been previously added
-  // to the collective throws if the device is not found
-  DeviceIdxType findIndex(const DeviceIdxType device) const {
-    auto it = std::find(vector_.begin(), vector_.end(), device);
-    TORCH_INTERNAL_ASSERT(
-        it != vector_.end(), "device index ", device, " is not in the mesh");
-    return std::distance(vector_.begin(), it);
-  }
-
  private:
   void set_(std::vector<DeviceIdxType> devices) {
     vector_ = devices;

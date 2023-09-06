@@ -68,8 +68,7 @@ CommParams CreateParamsForGatherScatter(
   }
 
   if (mesh.has(device_index)) {
-    auto sliced_buf = buf.index({static_cast<int>(mesh.findIndex(device_index)), "..."});
-    ((is_scatter)? params.dst_bufs : params.src_bufs) = {sliced_buf};
+    ((is_scatter)? params.dst_bufs : params.src_bufs) = {buf.index({0, "..."})};
   }
 
   if (device_index == root) {
@@ -146,7 +145,7 @@ void lowerToAllgather(
   for (auto i : c10::irange(mesh.vector().size())) {
     params.dst_bufs.push_back(output_tensor.index({static_cast<int>(i), "..."}));
   }
-  params.src_bufs = {input_tensor.index({mesh.findIndex(device_index), "..."})};
+  params.src_bufs = {input_tensor.index({0, "..."})};
 
   comms.push_back(std::make_shared<Allgather>(params));
 }
@@ -196,8 +195,8 @@ void lowerToBroadcast(
           device_index,
           sender_mesh.vector().at(i),
           DeviceMesh({receiver_mesh.vector().at(i)}),
-          input_tensor.index({static_cast<int>(i), "..."}),
-          output_tensor.index({static_cast<int>(i), "..."}),
+          input_tensor.index({0, "..."}),
+          output_tensor.index({0, "..."}),
           comms);
     }
   } else {
