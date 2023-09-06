@@ -79,7 +79,7 @@ void FillGatherScatter(
   }
 
   if (mesh.has(device_index)) {
-    addBuf(buf.index({mesh.findIndex(device_index), "..."}), is_scatter, coll);
+    addBuf(buf.index({0, "..."}), is_scatter, coll);
   }
 
   if (device_index == root) {
@@ -161,7 +161,7 @@ void lowerToAllgather(
   for (auto i : c10::irange(mesh.vector().size())) {
     coll->addDstBuf(output_tensor.index({static_cast<int>(i), "..."}));
   }
-  coll->addSrcBuf(input_tensor.index({mesh.findIndex(device_index), "..."}));
+  coll->addSrcBuf(input_tensor.index({0, "..."}));
 
   colls.push_back(coll);
 }
@@ -214,8 +214,8 @@ void lowerToBroadcast(
           device_index,
           sender_mesh.vector().at(i),
           DeviceMesh({receiver_mesh.vector().at(i)}),
-          input_tensor.index({static_cast<int>(i), "..."}),
-          output_tensor.index({static_cast<int>(i), "..."}),
+          input_tensor.index({0, "..."}),
+          output_tensor.index({0, "..."}),
           colls);
     }
   } else {
