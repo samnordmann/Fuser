@@ -507,6 +507,9 @@ std::vector<int64_t> getContiguousStrides(
 
 // Infer the size and stride of each dimension
 std::pair<std::vector<int64_t>, std::vector<int64_t>> inferShape(
+  //interesting. I think it can be used as-is.
+// What to do with the strides ? Maybe we should assert (or Warn) that the strides are 0
+// From the implementation of how to get the strides, I think it's not a problem
     const TensorView* tv,
     std::vector<Val*> symbolic_sizes,
     std::vector<bool> expand_flags,
@@ -543,7 +546,7 @@ std::pair<std::vector<int64_t>, std::vector<int64_t>> inferShape(
 }
 
 // Infer the shape of an intemediate tensor using kir::Allocate
-std::pair<std::vector<int64_t>, std::vector<int64_t>> inferShapeOfIntermediate(
+std::pair<std::vector<int64_t>, std::vector<int64_t>> inferShapeOfIntermediate( //can we use this directly?
     const TensorView* tv,
     const kir::Allocate* alloc,
     ExpressionEvaluator& expr_eval) {
@@ -561,7 +564,7 @@ std::pair<std::vector<int64_t>, std::vector<int64_t>> inferShapeOfIntermediate(
 }
 
 // Infer the sizes and strides of an output tensor
-std::pair<std::vector<int64_t>, std::vector<int64_t>> inferShapeOfOutput(
+std::pair<std::vector<int64_t>, std::vector<int64_t>> inferShapeOfOutput( //see here
     const TensorView* tv,
     ExpressionEvaluator& expr_eval) {
   // Fusion outputs do not come with Allocate and
@@ -573,7 +576,7 @@ std::pair<std::vector<int64_t>, std::vector<int64_t>> inferShapeOfOutput(
 
   // Allocate the allocation domain
   for (const auto id : tv->getMaybeAllocationDomain()) {
-    if (id->isReduction() || id->isStride()) {
+    if (id->isReduction() || id->isStride()) { //add isDevice?
       continue;
     }
     symbolic_sizes.push_back(id->getMaybeExpandedExtent());
@@ -868,11 +871,11 @@ class BackwardTraverseFromAllocToRFactor {
 // into a format whose dimensions are consistent with the rFactor domain of tv.
 // For example, if the rFactor domain is [I1, I2], and the allocation domain is
 // [I2*I1], then we will allocate as [I2*I1], then do a tensor.view(I2, I1).t()
-// to get a tensor whose semantics is [I1, I2] but its memory is [I2*I1].
+// to get a tensor whose semantics is [I1, I2] but its memory is [I2*I1]. interesting
 // Another example, if the rFactor domain is [I1*I2] and the allocation domain
 // is [I1, I2], then we will allocate as [I1, I2] and do a tensor.view(I1*I2) to
 // get a tensor whose semantics is [I1*I2] but memory is [I1,I2]
-at::Tensor transformOutputFromAllocationToRFactor(
+at::Tensor transformOutputFromAllocationToRFactor( //maybe it is brutal to completely discard a Did axis. In case of a reduction?
     at::Tensor tensor,
     TensorView* tv,
     ExpressionEvaluator& ee) {
@@ -950,9 +953,10 @@ std::vector<at::Tensor> allocOutputs(
           at::TensorOptions().dtype(at::kFloat).device(device);
       outputs.emplace_back(
           at::empty(std::vector<int64_t>(alloc_dom.size(), 0), tensor_options));
-    } else {
+    } else { // here is the allocation. We should assume no input alias for now.
+    // Or better, the alias should be between the input of the PipelineCommunication
       auto alloc_tensor = at::native::empty_strided_cuda(
-          buf_info.sizes,
+          buf_info.sizes, // where to get those sizes ?
           buf_info.strides,
           buf_info.type,
           c10::nullopt,
@@ -1231,7 +1235,7 @@ std::vector<at::Tensor> FusionExecutor::allocOutputSpace(
 
   const auto& output_to_input_aliases = input_alias_indices_entry.get();
 
-  auto output_info = getOutputBufferInfo(
+  auto output_info = getOutputBufferInfo( //need to get the buffer info of non-outputs
       kernel_inputs, expr_eval, output_to_input_aliases, kernel()->indexType());
 
   return allocOutputs(
@@ -1255,7 +1259,7 @@ std::vector<FusionExecutor::GlobalBufferInfo> FusionExecutor::
   TORCH_INTERNAL_ASSERT(
       args.size() == kernel->inputs().size(),
       "kernel arguments length does not match runtime arguments.");
-  for (const auto out_i : c10::irange(kernel->outputs().size())) {
+  for (const auto out_i : c10::irange(kernel->outputs().size())) { //need to iterate on smth else here
     GlobalBufferInfo info;
     auto out_val = kernel->outputs()[out_i];
     info.tv = dynamic_cast<TensorView*>(out_val);
@@ -1279,7 +1283,7 @@ std::vector<FusionExecutor::GlobalBufferInfo> FusionExecutor::
         // info. Leave it as is
       } else {
         std::tie(info.sizes, info.strides) =
-            inferShapeOfOutput(output, expr_eval);
+            inferShapeOfOutput(output, expr_eval);//look here
         auto dtype =
             (output->dtype() == DataType::Index ? index_dtype
                                                 : output->dtype());
@@ -1533,7 +1537,7 @@ void FusionExecutor::initializeExecutorEntry(
   executor_entry.launch_params = launch_params;
   executor_entry.output_to_input_aliases = output_to_input_aliases;
   executor_entry.outputs = output_info;
-  executor_entry.intermediates = intermediates;
+  executor_entry.intermediates = intermediates; // this where is initialized what we want
   executor_entry.init = true;
 }
 
