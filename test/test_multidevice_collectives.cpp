@@ -18,6 +18,7 @@ namespace nvfuser {
 
 static constexpr DeviceIdxType root = 0;
 static constexpr int tensor_size = 1024;
+static constexpr int number_of_repetitions = 8;
 
 TEST_F(NVFuserTest, FusionMultiGPU_Collective_Gather_CUDA) {
   if (!comm.is_available() || comm.size() < 2) {
@@ -36,26 +37,30 @@ TEST_F(NVFuserTest, FusionMultiGPU_Collective_Gather_CUDA) {
       params.dst_bufs.push_back(-at::ones(tensor_size, options));
     }
   }
-
-  auto coll = Gather(params);
-  auto work = coll.post(comm);
-  work->wait();
-
-  if (comm.deviceId() == root) {
-    for (int i : c10::irange(comm.size())) {
-      auto obtained = params.dst_bufs.at(i);
-      auto ref = at::ones(tensor_size, options) * i;
-      TORCH_INTERNAL_ASSERT(
-          obtained.equal(ref),
-          "Device",
-          comm.deviceId(),
-          "expected tensor ",
-          ref,
-          "\nbut obtained tensor: ",
-          obtained);
+  for (int i=0; i< number_of_repetitions; i++) {
+    for (auto& buf : params.dst_bufs) {
+      buf *= 0;
     }
+    auto coll = Gather(params);
+    auto work = coll.post(comm);
+    work->wait();
+
+    if (comm.deviceId() == root) {
+      for (int i : c10::irange(comm.size())) {
+        auto obtained = params.dst_bufs.at(i);
+        auto ref = at::ones(tensor_size, options) * i;
+        TORCH_INTERNAL_ASSERT(
+            obtained.equal(ref),
+            "Device",
+            comm.deviceId(),
+            "expected tensor ",
+            ref,
+            "\nbut obtained tensor: ",
+            obtained);
+      }
+    }
+    comm.barrier();
   }
-  comm.barrier();
 }
 
 TEST_F(NVFuserTest, FusionMultiGPU_Collective_Allgather_CUDA) {
