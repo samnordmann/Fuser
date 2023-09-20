@@ -29,15 +29,6 @@ bool isParallelD(TensorView* tv) {
   return is_parallel_d.empty() ? false : is_parallel_d.at(0);
 }
 
-// utility function that add a buff as a collective's src or dst depending on
-// the bool to_dst
-static inline void addBuf(
-    at::Tensor buf,
-    bool to_dst,
-    std::shared_ptr<Collective> coll) {
-  to_dst ? coll->addDstBuf(buf) : coll->addSrcBuf(buf);
-}
-
 static inline bool isDeviceInvolved(
     DeviceIdxType device_index,
     DeviceIdxType root,
@@ -56,35 +47,34 @@ static inline at::Tensor createDummyTensor(at::Tensor reference) {
   return at::empty(reference.sizes(), reference.options());
 }
 
-// Utility function used for setting up a scatter or gather collective "coll".
+// Utility function used for setting up a scatter or gather communication "comm".
 // Since most  of the steps are somewhat similar/opposite in those cases,
 // we gathered the two implementations into one function.
-// The argument "is_scatter" allows to discriminate which collective type
-// "coll" actually is.
-void FillGatherScatter(
+// The argument "is_scatter" allows to discriminate between scatter and gather
+CommParams CreateParamsForGatherScatter(
     DeviceIdxType device_index,
     DeviceIdxType root,
-    DeviceMesh mesh, // is_scatter? receivers : senders
+    DeviceMesh mesh,     // is_scatter? receivers : senders
     at::Tensor root_buf, // is_scatter? input buf : output buf
-    at::Tensor buf, // is_scatter? output buf : input buf
-    bool is_scatter,
-    std::shared_ptr<Collective> coll) {
-  coll->setRoot(root);
-  for (auto dst : mesh.vector()) {
-    coll->addDevice(dst);
-  }
+    at::Tensor buf,      // is_scatter? output buf : input buf
+    bool is_scatter) {
+
+  CommParams params;
+  params.root = root;
+  params.team = mesh.vector();
   bool is_root_in_mesh = mesh.has(root);
   if (!is_root_in_mesh) {
-    coll->addDevice(root);
+     params.team.push_back(root);
   }
 
   if (mesh.has(device_index)) {
-    addBuf(buf.index({mesh.findIndex(device_index), "..."}), is_scatter, coll);
+    auto sliced_buf = buf.index({static_cast<int>(mesh.findIndex(device_index)), "..."});
+    ((is_scatter)? params.dst_bufs : params.src_bufs) = {sliced_buf};
   }
 
   if (device_index == root) {
     for (auto i : c10::irange(mesh.vector().size())) {
-      addBuf(root_buf.index({static_cast<int>(i), "..."}), !is_scatter, coll);
+      ((is_scatter)? params.src_bufs : params.dst_bufs).push_back(root_buf.index({static_cast<int>(i), "..."}));
     }
     // The scatter/gather semantics imposes the root to be both
     // sender and receiver. If the root is not in the mesh, we thus
@@ -92,10 +82,11 @@ void FillGatherScatter(
     // Since it is an "inplace" operation, this should not cause any overhead
     if (!is_root_in_mesh) {
       at::Tensor dummy = createDummyTensor(root_buf.index({0, "..."}));
-      addBuf(dummy, true, coll);
-      addBuf(dummy, false, coll);
+      params.src_bufs.push_back(dummy);
+      params.dst_bufs.push_back(dummy);
     }
   }
+  return params;
 }
 
 void lowerToScatter(
@@ -104,21 +95,19 @@ void lowerToScatter(
     DeviceMesh receiver_mesh,
     at::Tensor input_tensor,
     at::Tensor output_tensor,
-    std::vector<std::shared_ptr<Collective>>& colls) {
+    std::vector<std::shared_ptr<Communication>>& comms) {
   // we arbitrarily choose the first device of the sender mesh to be the root
   auto root = sender_mesh.vector().at(0);
   if (!isDeviceInvolved(device_index, root, receiver_mesh))
     return;
-  auto coll = std::make_shared<Scatter>();
-  FillGatherScatter(
-      device_index,
-      root,
-      receiver_mesh,
-      input_tensor,
-      output_tensor,
-      true,
-      coll);
-  colls.push_back(coll);
+  auto params = CreateParamsForGatherScatter(
+                  device_index,
+                  root,
+                  receiver_mesh,
+                  input_tensor,
+                  output_tensor,
+                  true);
+  comms.push_back(std::make_shared<Scatter>(params));
 }
 
 void lowerToGather(
@@ -127,21 +116,19 @@ void lowerToGather(
     DeviceMesh receiver_mesh,
     at::Tensor input_tensor,
     at::Tensor output_tensor,
-    std::vector<std::shared_ptr<Collective>>& colls) {
+    std::vector<std::shared_ptr<Communication>>& comms) {
   // we create as many Gathers as there are devices in the receiver mesh
   for (auto root : receiver_mesh.vector()) {
     if (!isDeviceInvolved(device_index, root, sender_mesh))
       continue;
-    auto coll = std::make_shared<Gather>();
-    FillGatherScatter(
-        device_index,
-        root,
-        sender_mesh,
-        output_tensor,
-        input_tensor,
-        false,
-        coll);
-    colls.push_back(coll);
+    auto params = CreateParamsForGatherScatter(
+                    device_index,
+                    root,
+                    sender_mesh,
+                    output_tensor,
+                    input_tensor,
+                    false);
+    comms.push_back(std::make_shared<Gather>(params));
   }
 }
 
@@ -150,20 +137,18 @@ void lowerToAllgather(
     DeviceMesh mesh,
     at::Tensor input_tensor,
     at::Tensor output_tensor,
-    std::vector<std::shared_ptr<Collective>>& colls) {
+    std::vector<std::shared_ptr<Communication>>& comms) {
   if (!mesh.has(device_index))
     return;
 
-  auto coll = std::make_shared<Allgather>();
-  for (auto src : mesh.vector()) {
-    coll->addDevice(src);
-  }
+  CommParams params;
+  params.team = mesh.vector();
   for (auto i : c10::irange(mesh.vector().size())) {
-    coll->addDstBuf(output_tensor.index({static_cast<int>(i), "..."}));
+    params.dst_bufs.push_back(output_tensor.index({static_cast<int>(i), "..."}));
   }
-  coll->addSrcBuf(input_tensor.index({mesh.findIndex(device_index), "..."}));
+  params.src_bufs = {input_tensor.index({mesh.findIndex(device_index), "..."})};
 
-  colls.push_back(coll);
+  comms.push_back(std::make_shared<Allgather>(params));
 }
 
 void lowerToSingleBroadcast(
@@ -172,27 +157,24 @@ void lowerToSingleBroadcast(
     DeviceMesh mesh, // receiver devices
     at::Tensor input_tensor,
     at::Tensor output_tensor,
-    std::vector<std::shared_ptr<Collective>>& colls) {
+    std::vector<std::shared_ptr<Communication>>& comms) {
   if (!isDeviceInvolved(device_index, root, mesh))
     return;
 
-  auto coll = std::make_shared<Broadcast>();
-  coll->setRoot(root);
-  for (auto dst : mesh.vector()) {
-    coll->addDevice(dst);
-  }
-
+  CommParams params;
+  params.root = root;
+  params.team = mesh.vector();
   if (!mesh.has(root)) {
-    coll->addDevice(root);
+    params.team.push_back(root);
   }
 
   if (device_index == root) {
-    coll->addSrcBuf(input_tensor);
+    params.src_bufs = {input_tensor};
   } else {
-    coll->addDstBuf(output_tensor);
+    params.dst_bufs = {output_tensor};
   }
 
-  colls.push_back(coll);
+  comms.push_back(std::make_shared<Broadcast>(params));
 }
 
 // For now, we assume that this function is called only if
@@ -205,7 +187,7 @@ void lowerToBroadcast(
     at::Tensor input_tensor,
     at::Tensor output_tensor,
     bool is_parallelized,
-    std::vector<std::shared_ptr<Collective>>& colls) {
+    std::vector<std::shared_ptr<Communication>>& comms) {
   if (is_parallelized) {
     // if the inputs and ouputs are parallelized,
     // we create as many Broadcast as that will be handled in parallel
@@ -216,7 +198,7 @@ void lowerToBroadcast(
           DeviceMesh({receiver_mesh.vector().at(i)}),
           input_tensor.index({static_cast<int>(i), "..."}),
           output_tensor.index({static_cast<int>(i), "..."}),
-          colls);
+          comms);
     }
   } else {
     // we arbitrarily choose the first device of the sender mesh to be the root
@@ -226,7 +208,7 @@ void lowerToBroadcast(
         receiver_mesh,
         input_tensor,
         output_tensor,
-        colls);
+        comms);
   }
 }
 
@@ -234,16 +216,16 @@ void lowerToBroadcast(
 TODO:
 *) Propose several lowering paths for each given communication
    and provide a logic to decide which path to take
-*) Leverage replication in the source to create several collectives handled in
+*) Leverage replication in the source to create several communications handled in
 parallel The idea would be to evenly split the destinations accross the sources
 *) Leverage the topology to ensure that the senders and recerivers are close
 */
-std::vector<std::shared_ptr<Collective>> lowerCommunication(
+std::vector<std::shared_ptr<Communication>> lowerCommunication(
     DeviceIdxType device_index,
     PipelineCommunication* c,
     at::Tensor input_tensor,
     at::Tensor output_tensor) {
-  std::vector<std::shared_ptr<Collective>> colls;
+  std::vector<std::shared_ptr<Communication>> comms;
   TensorView* input_tv =
       c->in()->as<PipelineVal>()->getOriginalVal()->as<TensorView>();
   TensorView* output_tv =
@@ -288,11 +270,11 @@ std::vector<std::shared_ptr<Collective>> lowerCommunication(
         receiver_mesh,
         input_tensor,
         output_tensor,
-        colls);
+        comms);
   } else if (is_input_parallel_d && !is_output_parallel_d) {
     if (receiver_mesh.vector() == sender_mesh.vector()) {
       lowerToAllgather(
-          device_index, sender_mesh, input_tensor, output_tensor, colls);
+          device_index, sender_mesh, input_tensor, output_tensor, comms);
     } else {
       lowerToGather(
           device_index,
@@ -300,7 +282,7 @@ std::vector<std::shared_ptr<Collective>> lowerCommunication(
           receiver_mesh,
           input_tensor,
           output_tensor,
-          colls);
+          comms);
     }
   } else {
     lowerToBroadcast(
@@ -310,9 +292,9 @@ std::vector<std::shared_ptr<Collective>> lowerCommunication(
         input_tensor,
         output_tensor,
         is_input_parallel_d,
-        colls);
+        comms);
   }
-  return colls;
+  return comms;
 }
 
 } // namespace nvfuser

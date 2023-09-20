@@ -8,20 +8,19 @@
 #ifdef USE_DISTRIBUTED
 #pragma once
 
-#include <multidevice/collective.h>
+#include <multidevice/communication.h>
 #include <multidevice/multidevice.h>
 #include <multidevice/pipeline_ir.h>
 
 namespace nvfuser {
 
-// Lower a PipelineCommunication into a series of Collective, given a
+// Lower a PipelineCommunication into a series of Communication, given a
 // device_index.
-std::vector<std::shared_ptr<Collective>> lowerCommunication(
+std::vector<std::shared_ptr<Communication>> lowerCommunication(
     DeviceIdxType device_index,
     PipelineCommunication* c,
     at::Tensor input_tensor,
     at::Tensor output_tensor);
-
 } // namespace nvfuser
 
 #endif
