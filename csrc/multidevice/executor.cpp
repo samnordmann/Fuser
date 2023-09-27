@@ -102,7 +102,9 @@ std::vector<at::Tensor> PipelineExecutor::runWithInput(
       inputs.size() == runtime_.pipeline_->inputs().size(),
       "Wrong number of inputs");
 
-  // process input values input values:
+  val_to_IValue_ = allocatePipelineIntermediateBuffers(runtime_.pipeline_, runtime_.comm().deviceId(), inputs);
+
+  // process input values:
   for (auto input_idx : c10::irange(inputs.size())) {
     val_to_IValue_[runtime_.pipeline_->inputs().at(input_idx)] =
         inputs.at(input_idx);
