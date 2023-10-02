@@ -9,10 +9,12 @@
 #pragma once
 
 #include <c10/core/Device.h>
+#include <ir/interface_nodes.h>
 
 namespace nvfuser {
 using DeviceIdxType = int64_t;
 using DimensionType = int;
 using DeviceType = c10::Device;
 using Team = std::vector<DeviceIdxType>;
+
 } // namespace nvfuser

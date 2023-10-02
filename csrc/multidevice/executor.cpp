@@ -7,6 +7,7 @@
 // clang-format on
 #ifdef USE_DISTRIBUTED
 #include <ir/utils.h>
+#include <multidevice/allocator.h>
 #include <multidevice/executor.h>
 #include <multidevice/lower_communication.h>
 #include <multidevice/pipeline.h>
@@ -46,9 +47,9 @@ void PipelineExecutor::handle(PipelineStage* stage) {
     // TODO: allocate output space only if strictly necessary,
     //       and move the allocation to
     //       PipelineExecutor::handle(PipelineCommunication*)
-    outputs = shouldRun(stage)
-        ? fec_[stage]->runFusionWithInputs(stage_input_IValues)
-        : fec_[stage]->allocOutputSpace(stage_input_IValues);
+    if (shouldRun(stage)) {
+      outputs = fec_[stage]->runFusionWithInputs(stage_input_IValues);
+    }
 
   } else {
     // Check if the executor has been cached. If not, create and cache it
@@ -58,9 +59,9 @@ void PipelineExecutor::handle(PipelineStage* stage) {
           runtime_.pipeline_->stageToFusion(stage).get(), stage_input_IValues);
     }
     // Run the stage to get concrete outputs or placeholders
-    outputs = shouldRun(stage)
-        ? fe_[stage]->runFusion(stage_input_IValues)
-        : fe_[stage]->allocOutputSpace(stage_input_IValues);
+    if (shouldRun(stage)) {
+      outputs = fe_[stage]->runFusion(stage_input_IValues);
+    }
   }
 
   // Store the outputs or placeholders in the context
@@ -70,14 +71,16 @@ void PipelineExecutor::handle(PipelineStage* stage) {
 }
 
 void PipelineExecutor::handle(PipelineCommunication* c) {
-  at::Tensor input_tensor =
-      val_to_IValue_.at(c->in())
-          .toTensor(); // when stage has same input and ouput
+  // at::Tensor input_tensor =
+  //     val_to_IValue_.at(c->in())
+  //         .toTensor(); // when stage has same input and ouput
 
-  // Allocation of output buffer. TODO: revise
-  val_to_IValue_[c->out()] = val_to_IValue_.at(c->in());
-  at::Tensor output_tensor =
-      val_to_IValue_.at(c->out()).toTensor(); // shallow copy
+  // // Allocation of output buffer. TODO: revise
+  // val_to_IValue_[c->out()] = val_to_IValue_.at(c->in());
+  // at::Tensor output_tensor =
+  //     val_to_IValue_.at(c->out()).toTensor(); // shallow copy
+
+  NVF_ERROR(val_to_IValue_.find(c->out()) != val_to_IValue_.end(), "Device ", runtime_.comm_.deviceId(), " needs a buffer associated with:", c->out());
 
   // Lower the Communication into a vector of Communications
   if (communications_.find(c) == communications_.end()) { // check if cached
@@ -103,6 +106,15 @@ std::vector<at::Tensor> PipelineExecutor::runWithInput(
       "Wrong number of inputs");
 
   val_to_IValue_ = allocatePipelineIntermediateBuffers(runtime_.pipeline_, runtime_.comm().deviceId(), inputs);
+  std::stringstream ss;
+  ss << "RANK " << runtime_.comm().deviceId() << " has allocated:{\n";
+  for (auto& pair: val_to_IValue_) {
+    ss << "  val: " << pair.first;
+    ss << ", tensor sizes: " << pair.second.toTensor().sizes() << "\n";
+  }
+  ss << "}";
+  sleep(runtime_.comm().deviceId());
+  std::cout << ss.str() << std::endl;
 
   // process input values:
   for (auto input_idx : c10::irange(inputs.size())) {
@@ -116,7 +128,11 @@ std::vector<at::Tensor> PipelineExecutor::runWithInput(
   // Collect global outputs from context
   std::vector<at::Tensor> outputs;
   for (auto output_val : runtime_.pipeline_->outputs()) {
-    outputs.push_back(val_to_IValue_[output_val].toTensor());
+    if (val_to_IValue_.find(output_val) != val_to_IValue_.end()) {
+      outputs.push_back(val_to_IValue_[output_val].toTensor());
+    } else {
+      outputs.push_back(at::ones({1}, at::TensorOptions().dtype(at::kFloat).device(runtime_.comm().device())));
+    }
   }
 
   return outputs;
