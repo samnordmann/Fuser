@@ -13,22 +13,6 @@
 
 namespace nvfuser {
 
-// Returns whether a TensorView has its first axis parallelized on Didx
-// Checks that the other axis are not parallelized on Didx
-bool isParallelD(TensorView* tv) {
-  std::vector<bool> is_parallel_d;
-  for (IterDomain* id : tv->getRootDomain()) {
-    is_parallel_d.push_back(isParallelTypeDeviceDim(id->getParallelType()));
-  }
-  // Currently, only the most external dim is alloed to be parallelized
-  for (auto i : c10::irange(1, is_parallel_d.size())) {
-    TORCH_INTERNAL_ASSERT(
-        !is_parallel_d.at(i),
-        "only the outmost dimension can be device-parallelized");
-  }
-  return is_parallel_d.empty() ? false : is_parallel_d.at(0);
-}
-
 static inline bool isDeviceInvolved(
     DeviceIdxType device_index,
     DeviceIdxType root,
@@ -170,7 +154,8 @@ void lowerToSingleBroadcast(
 
   if (device_index == root) {
     params.src_bufs = {input_tensor};
-  } else {
+  }
+  if (mesh.has(device_index)) {
     params.dst_bufs = {output_tensor};
   }
 
@@ -237,11 +222,12 @@ std::vector<std::shared_ptr<Communication>> lowerCommunication(
       c->out()->as<PipelineVal>()->getStage()->descriptor()->mesh;
 
   // Stores whether the I/O has its first axis parallelized on Didx
-  bool is_input_parallel_d = isParallelD(input_tv);
-  bool is_output_parallel_d = isParallelD(output_tv);
+  bool is_input_sharded = input_tv->isSharded();
+  bool is_output_sharded = output_tv->isSharded();
 
   TORCH_INTERNAL_ASSERT(
-      !is_input_parallel_d ||
+      !is_input_sharded ||
+      !input_tensor.numel() ||
           sender_mesh.vector().size() ==
               static_cast<size_t>(input_tensor.size(0)),
       "the size of the mesh",
@@ -249,7 +235,8 @@ std::vector<std::shared_ptr<Communication>> lowerCommunication(
       " doesn't match the size of the tensor ",
       input_tensor.size(0));
   TORCH_INTERNAL_ASSERT(
-      !is_output_parallel_d ||
+      !is_output_sharded ||
+      !output_tensor.numel() ||
           receiver_mesh.vector().size() ==
               static_cast<size_t>(output_tensor.size(0)),
       "the size of the mesh",
@@ -263,7 +250,7 @@ std::vector<std::shared_ptr<Communication>> lowerCommunication(
   if (!isDeviceInvolved(device_index, sender_mesh, receiver_mesh))
     return {};
 
-  if (!is_input_parallel_d && is_output_parallel_d) {
+  if (!is_input_sharded && is_output_sharded) {
     lowerToScatter(
         device_index,
         sender_mesh,
@@ -271,7 +258,7 @@ std::vector<std::shared_ptr<Communication>> lowerCommunication(
         input_tensor,
         output_tensor,
         comms);
-  } else if (is_input_parallel_d && !is_output_parallel_d) {
+  } else if (is_input_sharded && !is_output_sharded) {
     if (receiver_mesh.vector() == sender_mesh.vector()) {
       lowerToAllgather(
           device_index, sender_mesh, input_tensor, output_tensor, comms);
@@ -291,7 +278,7 @@ std::vector<std::shared_ptr<Communication>> lowerCommunication(
         receiver_mesh,
         input_tensor,
         output_tensor,
-        is_input_parallel_d,
+        is_input_sharded,
         comms);
   }
   return comms;

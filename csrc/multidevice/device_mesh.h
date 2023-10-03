@@ -41,8 +41,8 @@ class DeviceMesh final {
  private:
   void set_(std::vector<DeviceIdxType> devices) {
     vector_ = devices;
-    TORCH_INTERNAL_ASSERT(!devices.empty(), "empty device mesh");
-    TORCH_INTERNAL_ASSERT(
+   NVF_ERROR(!devices.empty(), "empty device mesh");
+   NVF_ERROR(
         std::unique(vector_.begin(), vector_.end()) == vector_.end(),
         "device mesh has duplicates");
   }

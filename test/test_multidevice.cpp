@@ -72,7 +72,7 @@ void SendToTester(
       buffer = {tensor.index({comm.deviceId() == tester ? j : 0, "..."})};
       auto sender = mesh.vector().at(j);
       if (tester != sender && (comm.deviceId() == sender || comm.deviceId() == tester)) {
-        comm.sendRecv(tester, sender, buffer);
+        comm.sendRecv(tester, sender, buffer)->wait();
       }
     }
   } else {
@@ -80,7 +80,7 @@ void SendToTester(
     buffer = {tensor};
     auto sender = mesh.vector().at(0);
     if (tester != sender && (comm.deviceId() == sender || comm.deviceId() == tester)) {
-      comm.sendRecv(tester, sender, buffer);
+      comm.sendRecv(tester, sender, buffer)->wait();
     }
   }
 }
@@ -171,15 +171,13 @@ void testValidateMultidevice(
     for (auto i : c10::irange(outputs.size())) {
       auto obtained = outputs.at(i);
       auto ref = ref_outputs.at(i);
-      TORCH_INTERNAL_ASSERT(
-        obtained.allclose(ref, 1e-2),
-        // obtained.equal(ref),
-        "Device ",
-        runtime.comm().deviceId(),
-        " expected tensor ",
-        ref,
-        "\nbut obtained tensor: ",
-        obtained);
+      EXPECT_TRUE(obtained.allclose(ref, 1e-2))
+      << "Device "
+      << runtime.comm().deviceId() 
+      << " expected tensor "
+      << ref
+      << "\nbut obtained tensor: "
+      << obtained;
     }
   }
 }
