@@ -10,6 +10,7 @@
 
 #include <multidevice/communicator.h>
 #include <multidevice/multidevice.h>
+#include <type.h>
 
 namespace nvfuser {
 
@@ -22,7 +23,7 @@ struct TORCH_CUDA_CU_API CommParams {
   std::vector<at::Tensor> src_bufs;
   std::vector<at::Tensor> dst_bufs;
   Team team; // should not have duplicate
-  // BinaryOpType RedOp= BinaryOpType::Add;
+  BinaryOpType RedOp = -1;
 };
 
 /*
