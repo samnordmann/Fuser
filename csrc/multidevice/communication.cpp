@@ -6,6 +6,9 @@
  */
 // clang-format on
 #ifdef USE_DISTRIBUTED
+#ifdef USE_C10D_NCCL
+#include <torch/csrc/distributed/c10d/ProcessGroupNCCL.hpp>
+#endif
 
 #include <multidevice/communication.h>
 
@@ -205,26 +208,24 @@ c10::intrusive_ptr<c10d::Work> Scatter::post(Communicator& comm) {
 
 Reduce::Reduce(CommParams params) : Communication(params, "reduce") {
   assertBufferCount(params_.src_bufs, 1);
-    assertBufferCount(params_.dst_bufs, 0);
+  // assertBufferCount(params_.dst_bufs, 0);
   NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
 }
 
 c10::intrusive_ptr<c10d::Work> Reduce::post(Communicator& comm) {
   post_common(*this, comm);
-  // // This is used to change the representation of the buffers to match c10d
-  // // ProcessGroup API
-  // std::vector<std::vector<at::Tensor>> buf_list;
-  // if (comm.deviceId() == params_.root) {
-    // buf_list = {std::move(params_.dst_bufs)};
-  // }
-  auto work = comm.getBackendForTeam(params_.team)
-          ->reduce(params_.src_bufs, {.rootRank = root_relative_index_}); 
+  auto backend = comm.getBackendForTeam(params_.team);
+  auto nccl_backend = dynamic_cast<c10d::ProcessGroupNCCL*>(backend.get());
+  auto& buf = (comm.deviceId() == params_.root)? params_.dst_bufs : params_.src_bufs;
+  if (nccl_backend) {
+    return nccl_backend->_reduce_oop(buf, params_.src_bufs, {.rootRank = root_relative_index_}); 
+  } else {
+    if (comm.deviceId() == params_.root) {
+      doLocalCopy(params_.dst_bufs.at(0), params_.src_bufs.at(0));
+    }
+    return backend->reduce(buf, {.rootRank = root_relative_index_}); 
+  }
 // fill also .reduceOp,  https://github.com/pytorch/pytorch/blob/c36b31d5302d31746f3f3bd64ed8d9acd8e36155/torch/csrc/distributed/c10d/Types.hpp#L123
-// use _reduce_oop ? dynamic_cast<c10::intrusive_ptr<c10d::ProcessGroupNCCL>>(comm.getBackendForTeam(params_.team)) https://github.com/pytorch/pytorch/blob/c36b31d5302d31746f3f3bd64ed8d9acd8e36155/torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp#L2383C26-L2383C42
-  // if (comm.deviceId() == params_.root) {
-  //   params_.dst_bufs = std::move(buf_list.back());
-  // }
-  return work;
 }
 
 SendRecv::SendRecv(CommParams params) : Communication(params, "send/recv") {

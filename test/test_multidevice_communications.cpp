@@ -79,23 +79,23 @@ TEST_F(MultiDeviceTest, Communication_Reduce) {
   params.team = std::vector<DeviceIdxType>(comm.size());
   std::iota(params.team.begin(), params.team.end(), 0);
   params.src_bufs = {at::empty(tensor_size, options)};
-  // if (comm.deviceId() == root) {
-  //   params.dst_bufs.push_back(at::empty(tensor_size, options));
-  // }
+  if (comm.deviceId() == root) {
+    params.dst_bufs.push_back(at::empty(tensor_size, options));
+  }
   auto communication = Reduce(params);
 
   for (int j : c10::irange(number_of_repetitions)) {
     params.src_bufs.at(0).copy_(
         at::arange(tensor_size, options) + (comm.deviceId() + 1) * j);
-    // for (auto& buf : params.dst_bufs) {
-    //   buf.copy_(at::zeros(tensor_size, options));
-    // }
+    for (auto& buf : params.dst_bufs) {
+      buf.copy_(at::zeros(tensor_size, options));
+    }
 
     auto work = communication.post(comm);
     work->wait();
 
     if (comm.deviceId() == root) {
-      auto obtained = params.src_bufs.at(0);
+      auto obtained = params.dst_bufs.at(0);
       int S = comm.size();
       auto ref = at::arange(tensor_size, options) * S + S * (S + 1) / 2 * j;
       NVF_ERROR(
