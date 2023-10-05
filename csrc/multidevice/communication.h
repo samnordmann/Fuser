@@ -150,13 +150,12 @@ class TORCH_CUDA_CU_API Scatter : public Communication {
 };
 
 /*
-Copies each root's src buffer to each device's dst buffer.
-The order of the buffers matches the order of the receiver devices
+Reduce the src buffers to the root's dst buffer.
 
 Requirements:
   - the root is set and belongs to the team
-  - the root has <team_size> src buffers and one dst buffer
-  - non-roots have no src buffer and one dst buffer
+  - the root has one src buffers and one dst buffer
+  - non-roots have one src buffer and no dst buffer
   - all buffers have the same size
 */
 class TORCH_CUDA_CU_API Reduce : public Communication {
