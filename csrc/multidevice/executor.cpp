@@ -34,6 +34,16 @@ void PipelineExecutor::handle(PipelineStage* stage) {
     NVF_ERROR(val_to_IValue_.at(input_val).isTensor());
     stage_input_IValues.push_back(val_to_IValue_.at(input_val));
   }
+  // if (!runtime_.comm_.deviceId())
+  //   std::cout << "stage "
+  //             << stage->toString()
+  //             << " with "
+  //             << stage->inputs().size()
+  //             << "  input\n"
+  //             << stage->inputs().at(0)->as<PipelineVal>()->getOriginalVal()->toString()
+  //             << "\nwith value\n"
+  //             << stage_input_IValues.at(0)
+  //             << std::endl;
 
   std::vector<at::Tensor> outputs;
 
@@ -70,6 +80,16 @@ void PipelineExecutor::handle(PipelineStage* stage) {
   for (auto output_idx : c10::irange(outputs.size())) {
     val_to_IValue_[stage->outputs().at(output_idx)->as<PipelineVal>()->getOriginalVal()] = outputs.at(output_idx);
   }
+  // if (!runtime_.comm_.deviceId())
+  //   std::cout << "stage "
+  //             << stage->toString()
+  //             << " with "
+  //             << stage->outputs().size()
+  //             << "  outputs\n"
+  //             << stage->outputs().at(0)->as<PipelineVal>()->getOriginalVal()->toString()
+  //             << "\nwith value\n"
+  //             << outputs.at(0)
+  //             << std::endl;
 }
 
 void PipelineExecutor::handle(PipelineCommunication* c) {
@@ -82,6 +102,19 @@ void PipelineExecutor::handle(PipelineCommunication* c) {
   if (val_to_IValue_.find(output_val) != val_to_IValue_.end()) {
     output_tensor = val_to_IValue_.at(output_val).toTensor();
   }
+
+  // if (!runtime_.comm_.deviceId())
+  // std::cout << "communication "
+  //           << c->toString()
+  //           << "\nwith input\n"
+  //           << input_val->toString()
+  //           << "\nwith value\n"
+  //           << input_tensor
+  //           << "\nwith output\n"
+  //           << output_val->toString()
+  //           << "\nwith value\n"
+  //           << output_tensor
+  //           << std::endl;
 
   // Lower the Communication into a vector of Communications
   if (communications_.find(c) == communications_.end()) { // check if cached
