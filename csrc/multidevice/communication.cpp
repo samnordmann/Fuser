@@ -203,6 +203,30 @@ c10::intrusive_ptr<c10d::Work> Scatter::post(Communicator& comm) {
   return work;
 }
 
+Reduce::Reduce(CommParams params) : Communication(params, "reduce") {
+  assertBufferCount(params_.src_bufs, 1);
+    assertBufferCount(params_.dst_bufs, 0);
+  NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
+}
+
+c10::intrusive_ptr<c10d::Work> Reduce::post(Communicator& comm) {
+  post_common(*this, comm);
+  // // This is used to change the representation of the buffers to match c10d
+  // // ProcessGroup API
+  // std::vector<std::vector<at::Tensor>> buf_list;
+  // if (comm.deviceId() == params_.root) {
+    // buf_list = {std::move(params_.dst_bufs)};
+  // }
+  auto work = comm.getBackendForTeam(params_.team)
+          ->reduce(params_.src_bufs, {.rootRank = root_relative_index_}); 
+// fill also .reduceOp,  https://github.com/pytorch/pytorch/blob/c36b31d5302d31746f3f3bd64ed8d9acd8e36155/torch/csrc/distributed/c10d/Types.hpp#L123
+// use _reduce_oop ? dynamic_cast<c10::intrusive_ptr<c10d::ProcessGroupNCCL>>(comm.getBackendForTeam(params_.team)) https://github.com/pytorch/pytorch/blob/c36b31d5302d31746f3f3bd64ed8d9acd8e36155/torch/csrc/distributed/c10d/ProcessGroupNCCL.cpp#L2383C26-L2383C42
+  // if (comm.deviceId() == params_.root) {
+  //   params_.dst_bufs = std::move(buf_list.back());
+  // }
+  return work;
+}
+
 SendRecv::SendRecv(CommParams params) : Communication(params, "send/recv") {
   NVF_ERROR(
       params_.team.size() == 1 || params_.team.size() == 2,

@@ -22,6 +22,7 @@ struct TORCH_CUDA_CU_API CommParams {
   std::vector<at::Tensor> src_bufs;
   std::vector<at::Tensor> dst_bufs;
   Team team; // should not have duplicate
+  // BinaryOpType RedOp= BinaryOpType::Add;
 };
 
 /*
@@ -143,6 +144,22 @@ Requirements:
 class TORCH_CUDA_CU_API Scatter : public Communication {
  public:
   Scatter(CommParams params);
+  c10::intrusive_ptr<c10d::Work> post(Communicator& comm) override;
+};
+
+/*
+Copies each root's src buffer to each device's dst buffer.
+The order of the buffers matches the order of the receiver devices
+
+Requirements:
+  - the root is set and belongs to the team
+  - the root has <team_size> src buffers and one dst buffer
+  - non-roots have no src buffer and one dst buffer
+  - all buffers have the same size
+*/
+class TORCH_CUDA_CU_API Reduce : public Communication {
+ public:
+  Reduce(CommParams params);
   c10::intrusive_ptr<c10d::Work> post(Communicator& comm) override;
 };
 
