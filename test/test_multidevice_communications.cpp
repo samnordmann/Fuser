@@ -75,6 +75,7 @@ TEST_F(MultiDeviceTest, Communication_Reduce) {
       at::TensorOptions().dtype(at::kFloat).device(comm.device());
 
   CommParams params;
+  params.redOp = c10d::ReduceOp::SUM;
   params.root = root;
   params.team = std::vector<DeviceIdxType>(comm.size());
   std::iota(params.team.begin(), params.team.end(), 0);

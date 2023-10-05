@@ -9,7 +9,6 @@
 #ifdef USE_C10D_NCCL
 #include <torch/csrc/distributed/c10d/ProcessGroupNCCL.hpp>
 #endif
-#include <torch/csrc/distributed/c10d/Types.hpp>
 
 #include <multidevice/communication.h>
 
@@ -55,29 +54,6 @@ inline void post_common(Communication& self, Communicator& comm) {
 
 inline void doLocalCopy(const at::Tensor& dst, const at::Tensor& src) {
   dst.copy_(src, /* non-blocking */ true);
-}
-
-// TODO: add `c10d::reduceOp::AVG` and `c10d::reduceOp::PREMUL_SUM`
-inline c10d::reduceOp getC10dReduceOp(BinaryOpType op) {
-  switch (op) {
-  case BinaryOpType::Add:
-    return c10d::reduceOp::SUM;
-  case BinaryOpType::Mul:
-    return c10d::reduceOp::PRODUCT;
-  case BinaryOpType::Min:
-    return c10d::reduceOp::MIN;
-  case BinaryOpType::Max:
-    return c10d::reduceOp::MAX;
-  case BinaryOpType::BitwiseAnd:
-    return c10d::reduceOp::BAND;
-  case BinaryOpType::BitwiseOr:
-    return c10d::reduceOp::BOR;
-  case BinaryOpType::BitwiseXor:
-    return c10d::reduceOp::BXOR;
-  default:
-    NVF_ERROR(false, "unsupported reduction operation");
-    return c10d::reduceOp::UNUSED;
-  }
 }
 
 } // namespace
@@ -232,17 +208,21 @@ c10::intrusive_ptr<c10d::Work> Scatter::post(Communicator& comm) {
 
 Reduce::Reduce(CommParams params) : Communication(params, "reduce") {
   assertBufferCount(params_.src_bufs, 1);
-  // assertBufferCount(params_.dst_bufs, 0);
   NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
 }
 
 c10::intrusive_ptr<c10d::Work> Reduce::post(Communicator& comm) {
+  if (comm.deviceId() == params_.root) {
+    assertBufferCount(params_.dst_bufs, 1);
+  } else {
+    assertBufferCount(params_.dst_bufs, 0);
+  }
   post_common(*this, comm);
   auto backend = comm.getBackendForTeam(params_.team);
   auto nccl_backend = dynamic_cast<c10d::ProcessGroupNCCL*>(backend.get());
   auto& buf = (comm.deviceId() == params_.root)? params_.dst_bufs : params_.src_bufs;
-  c10d::ReduceOptions options = {.rootRank = root_relative_index_,
-                                 .reduceOp = getC10dReduceOp(params_.RedOp)};
+  c10d::ReduceOptions options = {.reduceOp = params_.redOp,
+                                 .rootRank = root_relative_index_};
   if (nccl_backend) {
     return nccl_backend->_reduce_oop(buf, params_.src_bufs, {.rootRank = root_relative_index_}); 
   } else {
@@ -251,7 +231,6 @@ c10::intrusive_ptr<c10d::Work> Reduce::post(Communicator& comm) {
     }
     return backend->reduce(buf, {.rootRank = root_relative_index_});
   }
-// fill also .reduceOp,  https://github.com/pytorch/pytorch/blob/c36b31d5302d31746f3f3bd64ed8d9acd8e36155/torch/csrc/distributed/c10d/Types.hpp#L123
 }
 
 SendRecv::SendRecv(CommParams params) : Communication(params, "send/recv") {

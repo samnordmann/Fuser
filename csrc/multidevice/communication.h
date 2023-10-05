@@ -11,6 +11,7 @@
 #include <multidevice/communicator.h>
 #include <multidevice/multidevice.h>
 #include <type.h>
+#include <torch/csrc/distributed/c10d/Types.hpp>
 
 namespace nvfuser {
 
@@ -23,7 +24,7 @@ struct TORCH_CUDA_CU_API CommParams {
   std::vector<at::Tensor> src_bufs;
   std::vector<at::Tensor> dst_bufs;
   Team team; // should not have duplicate
-  BinaryOpType RedOp = -1;
+  c10d::ReduceOp redOp = c10d::ReduceOp::UNUSED;
 };
 
 /*
