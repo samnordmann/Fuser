@@ -224,13 +224,25 @@ c10::intrusive_ptr<c10d::Work> Reduce::post(Communicator& comm) {
   c10d::ReduceOptions options = {.reduceOp = params_.redOp,
                                  .rootRank = root_relative_index_};
   if (nccl_backend) {
-    return nccl_backend->_reduce_oop(buf, params_.src_bufs, {.rootRank = root_relative_index_}); 
+    return nccl_backend->_reduce_oop(buf, params_.src_bufs, options); 
   } else {
     if (comm.deviceId() == params_.root) {
       doLocalCopy(params_.dst_bufs.at(0), params_.src_bufs.at(0));
     }
-    return backend->reduce(buf, {.rootRank = root_relative_index_});
+    return backend->reduce(buf, options);
   }
+}
+
+Allreduce::Allreduce(CommParams params) : Communication(params, "allreduce", false) {
+  assertBufferCount(params_.src_bufs, 1);
+  assertBufferCount(params_.dst_bufs, 1);
+  NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
+}
+
+c10::intrusive_ptr<c10d::Work> Allreduce::post(Communicator& comm) {
+  post_common(*this, comm);
+  doLocalCopy(params_.dst_bufs.at(0), params_.src_bufs.at(0));
+  return comm.getBackendForTeam(params_.team)->allreduce(params_.dst_bufs, {.reduceOp = params_.redOp});
 }
 
 SendRecv::SendRecv(CommParams params) : Communication(params, "send/recv") {

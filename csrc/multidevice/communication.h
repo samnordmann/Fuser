@@ -165,6 +165,19 @@ class TORCH_CUDA_CU_API Reduce : public Communication {
 };
 
 /*
+Reduce the src buffers to the dst buffer.
+
+Requirements:
+  - all devices have one src buffer and one dst buffer
+  - all buffers have the same size
+*/
+class TORCH_CUDA_CU_API Allreduce : public Communication {
+ public:
+  Allreduce(CommParams params);
+  c10::intrusive_ptr<c10d::Work> post(Communicator& comm) override;
+};
+
+/*
 Copies the sender's src buffers to the receiver's dst buffer
 It is equivalent to a Broadcast with a team of size == 2
 

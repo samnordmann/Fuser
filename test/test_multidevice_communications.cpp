@@ -112,6 +112,45 @@ TEST_F(MultiDeviceTest, Communication_Reduce) {
   comm.barrier();
 }
 
+TEST_F(MultiDeviceTest, Communication_Allreduce) {
+  if (!comm.is_available() || comm.size() < 2) {
+    GTEST_SKIP() << "This test needs at least 2 ranks";
+  }
+  c10::TensorOptions options =
+      at::TensorOptions().dtype(at::kFloat).device(comm.device());
+
+  CommParams params;
+  params.redOp = c10d::ReduceOp::SUM;
+  params.root = root;
+  params.team = std::vector<DeviceIdxType>(comm.size());
+  std::iota(params.team.begin(), params.team.end(), 0);
+  params.src_bufs = {at::empty(tensor_size, options)};
+  params.dst_bufs.push_back(at::empty(tensor_size, options));
+  auto communication = Allreduce(params);
+
+  for (int j : c10::irange(number_of_repetitions)) {
+    params.src_bufs.at(0).copy_(
+        at::arange(tensor_size, options) + (comm.deviceId() + 1) * j);
+    params.dst_bufs.at(0).copy_(at::zeros(tensor_size, options));
+
+    auto work = communication.post(comm);
+    work->wait();
+
+    auto obtained = params.dst_bufs.at(0);
+    int S = comm.size();
+    auto ref = at::arange(tensor_size, options) * S + S * (S + 1) / 2 * j;
+    NVF_ERROR(
+        at::equal(obtained, ref),
+        "Device ",
+        comm.deviceId(),
+        " expected tensor:\n",
+        ref,
+        "\nbut obtained tensor:\n",
+        obtained);
+  }
+  comm.barrier();
+}
+
 TEST_F(MultiDeviceTest, Communication_Allgather) {
   if (!comm.is_available() || comm.size() < 2) {
     GTEST_SKIP() << "This test needs at least 2 ranks";
