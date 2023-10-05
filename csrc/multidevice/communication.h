@@ -24,7 +24,7 @@ struct TORCH_CUDA_CU_API CommParams {
   std::vector<at::Tensor> src_bufs;
   std::vector<at::Tensor> dst_bufs;
   Team team; // should not have duplicate
-  c10d::ReduceOp redOp = c10d::ReduceOp::UNUSED;
+  c10d::ReduceOp::RedOpType redOp = c10d::ReduceOp::RedOpType::UNUSED;
 };
 
 /*
@@ -174,6 +174,19 @@ Requirements:
 class TORCH_CUDA_CU_API Allreduce : public Communication {
  public:
   Allreduce(CommParams params);
+  c10::intrusive_ptr<c10d::Work> post(Communicator& comm) override;
+};
+
+/*
+Reduce all the src buffers and shard the result to the dst buffers.
+
+Requirements:
+  - all devices have <team_size> src buffer and one dst buffer
+  - all buffers have the same size
+*/
+class TORCH_CUDA_CU_API ReduceScatter : public Communication {
+ public:
+  ReduceScatter(CommParams params);
   c10::intrusive_ptr<c10d::Work> post(Communicator& comm) override;
 };
 
