@@ -62,7 +62,6 @@ Communication::Communication(CommParams params, std::string name, bool has_root)
     : params_(std::move(params)),
       collective_type_(std::move(name)),
       has_root_(has_root) {
-  assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
   NVF_ERROR(
       std::unique(params_.team.begin(), params_.team.end()) ==
           params_.team.end(),
@@ -108,7 +107,9 @@ std::string Communication::toString(int indent) const {
   return ss.str();
 }
 
-Broadcast::Broadcast(CommParams params) : Communication(params, "broadcast") {}
+Broadcast::Broadcast(CommParams params) : Communication(params, "broadcast") {
+  assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
+}
 
 c10::intrusive_ptr<c10d::Work> Broadcast::post(Communicator& comm) {
   post_common(*this, comm);
@@ -136,6 +137,7 @@ c10::intrusive_ptr<c10d::Work> Broadcast::post(Communicator& comm) {
 }
 
 Gather::Gather(CommParams params) : Communication(params, "gather") {
+  assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
   assertBufferCount(params_.src_bufs, 1);
   NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
 }
@@ -163,6 +165,7 @@ c10::intrusive_ptr<c10d::Work> Gather::post(Communicator& comm) {
 
 Allgather::Allgather(CommParams params)
     : Communication(params, "allgather", false) {
+  assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
   assertBufferCount(params_.src_bufs, 1);
   assertBufferCount(params_.dst_bufs, params_.team.size());
   NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
@@ -181,6 +184,7 @@ c10::intrusive_ptr<c10d::Work> Allgather::post(Communicator& comm) {
 }
 
 Scatter::Scatter(CommParams params) : Communication(params, "scatter") {
+  assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
   assertBufferCount(params_.dst_bufs, 1);
   NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
 }
@@ -207,6 +211,7 @@ c10::intrusive_ptr<c10d::Work> Scatter::post(Communicator& comm) {
 }
 
 Reduce::Reduce(CommParams params) : Communication(params, "reduce") {
+  assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
   assertBufferCount(params_.src_bufs, 1);
   NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
 }
@@ -234,6 +239,7 @@ c10::intrusive_ptr<c10d::Work> Reduce::post(Communicator& comm) {
 }
 
 Allreduce::Allreduce(CommParams params) : Communication(params, "allreduce", false) {
+  assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
   assertBufferCount(params_.src_bufs, 1);
   assertBufferCount(params_.dst_bufs, 1);
   NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
@@ -262,6 +268,7 @@ c10::intrusive_ptr<c10d::Work> ReduceScatter::post(Communicator& comm) {
 }
 
 SendRecv::SendRecv(CommParams params) : Communication(params, "send/recv") {
+  assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
   NVF_ERROR(
       params_.team.size() == 1 || params_.team.size() == 2,
       "the team size should be 1 or 2");

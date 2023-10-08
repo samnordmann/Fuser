@@ -531,7 +531,7 @@ class TORCH_CUDA_CU_API TensorView : public Val {
   // Checks that the other axis are not parallelized on Didx
   bool isSharded() const {
     std::vector<bool> is_parallel_d;
-    for (IterDomain* id : getRootDomain()) {
+    for (IterDomain* id : TensorDomain::noReductions(getLeafDomain())) {
       is_parallel_d.push_back(isParallelTypeDeviceDim(id->getParallelType()));
     }
     // Currently, only the most external dim is alloed to be parallelized

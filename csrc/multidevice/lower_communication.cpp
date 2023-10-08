@@ -327,6 +327,33 @@ void lowerToAllreduce(
   comms.push_back(std::make_shared<Allreduce>(params));
 }
 
+void lowerToReduceScatter(
+    DeviceIdxType my_device_index,
+    DeviceMesh mesh,
+    at::Tensor input_tensor,
+    at::Tensor output_tensor,
+    BinaryOpType op_type,
+    std::vector<std::shared_ptr<Communication>>& comms) {
+  if (!mesh.has(my_device_index)) {
+    return;
+  }
+  CommParams params;
+  params.redOp = getC10dReduceOpType(op_type);
+  params.team = mesh.vector();
+  // params.dst_bufs = {output_tensor.index({0, "..."})};
+  sleep(2*my_device_index);
+  std::cout << "RANK " << my_device_index << " has input tensor:\n" << input_tensor << "\nand output:\n" << output_tensor<< std::endl;
+  params.dst_bufs = {output_tensor.index({0, "..."})};
+  // params.dst_bufs = {output_tensor.index({"..."})};
+  for (int i: params.team) {
+    auto sliced_buf = input_tensor.index({0, i, "..."});
+    // auto sliced_buf = input_tensor.index({i, "..."});
+    params.src_bufs.push_back(sliced_buf);
+  }
+
+  comms.push_back(std::make_shared<ReduceScatter>(params));
+}
+
 /*
 TODO:
 *) Propose several lowering paths for each given communication
@@ -369,6 +396,7 @@ std::vector<std::shared_ptr<Communication>> lowerCommunication(
   TORCH_INTERNAL_ASSERT(
       !is_output_sharded ||
       !output_tensor.numel() ||
+      is_reduction ||
           receiver_mesh.vector().size() ==
               static_cast<size_t>(output_tensor.size(0)),
       "the size of the mesh",
@@ -384,7 +412,18 @@ std::vector<std::shared_ptr<Communication>> lowerCommunication(
 
   if (is_reduction) {
     BinaryOpType op_type = output_tv->definition()->as<ReductionOp>()->getReductionOpType();
-    if (is_input_sharded && !is_output_sharded) {
+    NVF_ERROR(is_input_sharded, "the comm input must be sharded in case of reduce.",
+                                "Insert a `set` before the reduction to reshard")
+    if (is_output_sharded) {
+      if (receiver_mesh == sender_mesh) {
+        lowerToReduceScatter(device_index,
+                      sender_mesh,
+                      input_tensor,
+                      output_tensor,
+                      op_type,
+                      comms);
+      }
+    } else {
       if (receiver_mesh == sender_mesh) {
         lowerToAllreduce(device_index,
                       sender_mesh,

@@ -68,6 +68,7 @@ void SendToTester(
       tensor.select(0, i) = tensor.select(0, 0);
     }
     // We send/recv to the tester all the tensor slices
+    std::cout << "RANK " << comm.deviceId() << " sendrecv about to index " << pVal->getOriginalVal() <<" with buf "<< tensor << std::endl;
     for (DeviceIdxType j : c10::irange(mesh.vector().size())) {
       buffer = {tensor.index({comm.deviceId() == tester ? j : 0, "..."})};
       auto sender = mesh.vector().at(j);
@@ -189,7 +190,7 @@ void executeAndTestPipeline(
     Pipeline& pipeline,
     Communicator& comm,
     std::vector<c10::IValue>& inputs,
-    bool print = false) {
+    bool print = true) {
   if (print && !comm.deviceId()) {
     fusion_ptr->printKernel();
     std::cout << pipeline.toString() << std::endl;
@@ -213,6 +214,7 @@ void executeAndTestPipeline(
     ss << "\n}";
     std::cout << ss.str() << std::endl;
   }
+  std::cout << "!!!RANK " << comm.deviceId() << " ABOUT TO TEST" << std::endl;
 
   testValidateMultidevice(
       std::move(fusion_ptr), runtime, inputs, outputs, print);
@@ -780,7 +782,57 @@ TEST_F(MultiDeviceTest, Pipeline_Allreduce) {
 
   c10::TensorOptions options =
       at::TensorOptions().dtype(at::kFloat).device(comm.device());
-  std::vector<c10::IValue> inputs{at::ones({, 3, 1, 2}, options) * (comm.deviceId() + 1)};
+  std::vector<c10::IValue> inputs{at::ones({4, 3, 1, 2}, options) * (comm.deviceId() + 1)};
+
+  executeAndTestPipeline(std::move(fusion_ptr), pipeline, comm, inputs);
+}
+
+TEST_F(MultiDeviceTest, Pipeline_ReduceScatter) {
+  std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
+  Fusion& fusion = *fusion_ptr.get();
+  FusionGuard fg(&fusion);
+
+  TensorView* tv0 = makeContigTensor(4);
+  fusion.addInput(tv0);
+  TensorView* tv1 = sum(tv0, {3});
+  TensorView* tv2 = sum(tv1, {0});
+  TensorView* tv3 = sum(tv2, {1});
+  fusion.addOutput(tv3);
+
+  tv0->axis(0)->parallelize(ParallelType::DIDx);
+  tv1->axis(0)->parallelize(ParallelType::DIDx);
+  tv2->axis(1)->parallelize(ParallelType::DIDx);
+  tv3->axis(0)->parallelize(ParallelType::DIDx);
+
+  if (!comm.deviceId()) {
+    std::cout <<
+      "\ntv0=" << tv0 <<
+      "\ntv1=" << tv1 <<
+      "\ntv2=" << tv2 <<
+      "\ntv3=" << tv3 <<
+      "\ntv2->axis(0)" << tv2->axis(0) <<
+      "\ntv2->axis(1)" << tv2->axis(1) <<
+      "\ntv2->axis(2)" << tv2->axis(2) <<
+      std::endl;
+  }
+
+  PipelineStageDescriptor stage0, stage1;
+  stage0.addVal({tv0, tv1});
+  stage1.addVal({tv2, tv3});
+
+  stage0.mesh = {0, 1, 2, 3};
+  stage0.auto_schedule = false;
+  stage1.mesh = {0, 1, 2, 3};
+  stage1.auto_schedule = false;
+
+  PipelineDescriptor descriptor{
+      .stage_descriptors{std::move(stage0), std::move(stage1)}};
+
+  Pipeline pipeline(&fusion, std::move(descriptor));
+
+  c10::TensorOptions options =
+      at::TensorOptions().dtype(at::kFloat).device(comm.device());
+  std::vector<c10::IValue> inputs{at::ones({4, 4, 1, 2}, options) * (comm.deviceId() + 1)};
 
   executeAndTestPipeline(std::move(fusion_ptr), pipeline, comm, inputs);
 }
