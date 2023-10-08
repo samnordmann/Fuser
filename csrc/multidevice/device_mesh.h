@@ -28,14 +28,14 @@ class DeviceMesh final {
     return *this;
   }
 
-  bool operator== (const DeviceMesh& other) const { 
-    return vector() == other.vector(); 
-  } 
-
   // return a vector containing the device indices of the mesh
   const auto& vector() const {
     return vector_;
   }
+
+  bool operator== (const DeviceMesh& other) const { 
+    return vector() == other.vector(); 
+  } 
 
   // returns whether a device is present in the mesh
   bool has(const DeviceIdxType device) const {

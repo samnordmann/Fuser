@@ -689,7 +689,6 @@ TEST_F(MultiDeviceTest, Pipeline_Reduce) {
   TensorView* tv3 = sum(tv2, {0});
   fusion.addOutput(tv3);
 
-  std::cout << tv1->definition()->toString() << std::endl;
   tv0->axis(0)->parallelize(ParallelType::DIDx);
   tv1->axis(0)->parallelize(ParallelType::DIDx);
 
@@ -726,7 +725,6 @@ TEST_F(MultiDeviceTest, Pipeline_ReduceToExternalRoot) {
   TensorView* tv3 = sum(tv2, {0});
   fusion.addOutput(tv3);
 
-  std::cout << tv1->definition()->toString() << std::endl;
   tv0->axis(0)->parallelize(ParallelType::DIDx);
   tv1->axis(0)->parallelize(ParallelType::DIDx);
 
@@ -747,6 +745,42 @@ TEST_F(MultiDeviceTest, Pipeline_ReduceToExternalRoot) {
   c10::TensorOptions options =
       at::TensorOptions().dtype(at::kFloat).device(comm.device());
   std::vector<c10::IValue> inputs{at::ones({2, 3, 1, 2}, options) * (comm.deviceId() + 1)};
+
+  executeAndTestPipeline(std::move(fusion_ptr), pipeline, comm, inputs);
+}
+
+TEST_F(MultiDeviceTest, Pipeline_Allreduce) {
+  std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
+  Fusion& fusion = *fusion_ptr.get();
+  FusionGuard fg(&fusion);
+
+  TensorView* tv0 = makeContigTensor(4);
+  fusion.addInput(tv0);
+  TensorView* tv1 = sum(tv0, {1});
+  TensorView* tv2 = sum(tv1, {0});
+  TensorView* tv3 = sum(tv2, {0});
+  fusion.addOutput(tv3);
+
+  tv0->axis(0)->parallelize(ParallelType::DIDx);
+  tv1->axis(0)->parallelize(ParallelType::DIDx);
+
+  PipelineStageDescriptor stage0, stage1;
+  stage0.addVal({tv0, tv1});
+  stage1.addVal({tv2, tv3});
+
+  stage0.mesh = {0, 1, 2, 3};
+  stage0.auto_schedule = false;
+  stage1.mesh = {0, 1, 2, 3};
+  stage1.auto_schedule = false;
+
+  PipelineDescriptor descriptor{
+      .stage_descriptors{std::move(stage0), std::move(stage1)}};
+
+  Pipeline pipeline(&fusion, std::move(descriptor));
+
+  c10::TensorOptions options =
+      at::TensorOptions().dtype(at::kFloat).device(comm.device());
+  std::vector<c10::IValue> inputs{at::ones({, 3, 1, 2}, options) * (comm.deviceId() + 1)};
 
   executeAndTestPipeline(std::move(fusion_ptr), pipeline, comm, inputs);
 }

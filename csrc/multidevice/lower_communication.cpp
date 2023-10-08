@@ -266,7 +266,6 @@ CommParams createParamsForReduce(
   }
 
   if (mesh.has(my_device_index)) {
-    std::cout << "RANK " << my_device_index << " indexing on " << input_tensor << std::endl;
     auto sliced_buf = input_tensor.index({0, "..."});
     params.src_bufs = {sliced_buf};
   }
@@ -304,8 +303,28 @@ void lowerToReduce(
                     input_tensor,
                     output_tensor,
                     op_type);
-    comms.push_back(std::make_shared<Reduce>(params));
+    comms.push_back(std::make_shared<Reduce>(std::move(params)));
   }
+}
+
+void lowerToAllreduce(
+    DeviceIdxType my_device_index,
+    DeviceMesh mesh,
+    at::Tensor input_tensor,
+    at::Tensor output_tensor,
+    BinaryOpType op_type,
+    std::vector<std::shared_ptr<Communication>>& comms) {
+  if (!mesh.has(my_device_index)) {
+    return;
+  }
+  CommParams params;
+  params.redOp = getC10dReduceOpType(op_type);
+  params.team = mesh.vector();
+  params.dst_bufs = {output_tensor};
+  auto sliced_buf = input_tensor.index({0, "..."});
+  params.src_bufs = {sliced_buf};
+
+  comms.push_back(std::make_shared<Allreduce>(params));
 }
 
 /*
@@ -366,13 +385,22 @@ std::vector<std::shared_ptr<Communication>> lowerCommunication(
   if (is_reduction) {
     BinaryOpType op_type = output_tv->definition()->as<ReductionOp>()->getReductionOpType();
     if (is_input_sharded && !is_output_sharded) {
-      lowerToReduce(device_index,
-                    sender_mesh,
-                    receiver_mesh,
-                    input_tensor,
-                    output_tensor,
-                    op_type,
-                    comms);
+      if (receiver_mesh == sender_mesh) {
+        lowerToAllreduce(device_index,
+                      sender_mesh,
+                      input_tensor,
+                      output_tensor,
+                      op_type,
+                      comms);
+      } else {
+        lowerToReduce(device_index,
+                      sender_mesh,
+                      receiver_mesh,
+                      input_tensor,
+                      output_tensor,
+                      op_type,
+                      comms);
+      }
     }
   } else {
     if (!is_input_sharded && is_output_sharded) {
