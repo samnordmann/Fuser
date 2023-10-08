@@ -373,18 +373,6 @@ std::vector<std::shared_ptr<Communication>> lowerCommunication(
                     output_tensor,
                     op_type,
                     comms);
-      // std::cout << "RANK "
-      //           << device_index
-      //           << " lowered to "
-      //           << comms.at(0)->toString()
-      //           << "\n input tensor:\n"
-      //           << comms.at(0)->params().src_bufs.at(0)
-      //           << "\n output tensor:\n";
-      // if (comms.at(0)->params().dst_bufs.size()) {
-      //   std::cout << comms.at(0)->params().dst_bufs.at(0);
-      // }
-      // std::cout <<std::endl;
-      // sleep(2);
     }
   } else {
     if (!is_input_sharded && is_output_sharded) {
@@ -396,7 +384,7 @@ std::vector<std::shared_ptr<Communication>> lowerCommunication(
           output_tensor,
           comms);
     } else if (is_input_sharded && !is_output_sharded) {
-      if (receiver_mesh.vector() == sender_mesh.vector()) {
+      if (receiver_mesh == sender_mesh) {
         lowerToAllgather(
             device_index, sender_mesh, input_tensor, output_tensor, comms);
       } else {
