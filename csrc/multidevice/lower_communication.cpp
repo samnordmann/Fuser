@@ -277,7 +277,7 @@ CommParams createParamsForReduce(
     // sender and receiver. If the root is not in the mesh, we thus
     // have to artificially make it send and receive a dummy buffer
     if (!is_root_in_mesh) {
-      at::Tensor dummy = createDummyTensor(output_tensor.index({0, "..."}), op_type);
+      at::Tensor dummy = createDummyTensor(output_tensor, op_type);
       params.src_bufs.push_back(dummy);
     }
   }
