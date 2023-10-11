@@ -801,20 +801,8 @@ TEST_F(MultiDeviceTest, Pipeline_ReduceScatter) {
 
   tv0->axis(0)->parallelize(ParallelType::DIDx);
   tv1->axis(0)->parallelize(ParallelType::DIDx);
-  tv2->axis(1)->parallelize(ParallelType::DIDx);
+  tv2->axis(1)->parallelize(ParallelType::DIDx); //axis(0) is the "reduce" axis from previous tensor
   tv3->axis(0)->parallelize(ParallelType::DIDx);
-
-  if (!comm.deviceId()) {
-    std::cout <<
-      "\ntv0=" << tv0 <<
-      "\ntv1=" << tv1 <<
-      "\ntv2=" << tv2 <<
-      "\ntv3=" << tv3 <<
-      "\ntv2->axis(0)" << tv2->axis(0) <<
-      "\ntv2->axis(1)" << tv2->axis(1) <<
-      "\ntv2->axis(2)" << tv2->axis(2) <<
-      std::endl;
-  }
 
   PipelineStageDescriptor stage0, stage1;
   stage0.addVal({tv0, tv1});

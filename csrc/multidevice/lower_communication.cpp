@@ -340,14 +340,9 @@ void lowerToReduceScatter(
   CommParams params;
   params.redOp = getC10dReduceOpType(op_type);
   params.team = mesh.vector();
-  // params.dst_bufs = {output_tensor.index({0, "..."})};
-  sleep(2*my_device_index);
-  std::cout << "RANK " << my_device_index << " has input tensor:\n" << input_tensor << "\nand output:\n" << output_tensor<< std::endl;
   params.dst_bufs = {output_tensor.index({0, "..."})};
-  // params.dst_bufs = {output_tensor.index({"..."})};
   for (int i: params.team) {
     auto sliced_buf = input_tensor.index({0, i, "..."});
-    // auto sliced_buf = input_tensor.index({i, "..."});
     params.src_bufs.push_back(sliced_buf);
   }
 
