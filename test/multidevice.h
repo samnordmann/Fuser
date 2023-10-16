@@ -9,13 +9,25 @@
 #pragma once
 
 #include <multidevice/communicator.h>
+#include <multidevice/pipeline.h>
+#include <multidevice/pipeline_ir.h>
+#include <multidevice/runtime.h>
 #include <test/utils.h>
+#include <test/validator.h>
 
 namespace nvfuser {
 
 class MultiDeviceTest : public NVFuserTest {
  protected:
-  static Communicator comm;
+  static void SetUpTestSuite() {
+    communicator = new Communicator();
+  }
+
+  static void TearDownTestSuite() {
+    delete communicator;
+  }
+
+  static Communicator* communicator;
 };
 
 } // namespace nvfuser

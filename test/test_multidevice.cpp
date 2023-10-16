@@ -25,16 +25,12 @@
 #include <kernel_cache.h>
 #include <kernel_ir.h>
 #include <mma_type.h>
-#include <multidevice/pipeline.h>
-#include <multidevice/pipeline_ir.h>
-#include <multidevice/runtime.h>
 #include <ops/all_ops.h>
 #include <root_domain_map.h>
 #include <scheduler/all_schedulers.h>
 #include <scheduler/reduction_utils.h>
 #include <scheduler/utils.h>
 #include <test/multidevice.h>
-#include <test/validator.h>
 #include <torch/csrc/jit/codegen/cuda/interface.h>
 #include <transform_replay.h>
 #include <transform_rfactor.h>
@@ -47,77 +43,140 @@ namespace nvfuser {
 using namespace torch::jit::fuser::cuda;
 using namespace at::indexing;
 
-// We create the communicator globally for all the tests
-Communicator MultiDeviceTest::comm = {};
-
-// Send a possibly sharded tensor represented by a PipelineVal
-// to one "tester" device
-void SendToTester(
-    PipelineVal* pVal,
-    at::Tensor tensor,
-    DeviceIdxType tester,
-    Communicator& comm) {
-  std::vector<at::Tensor> buffer;
-  auto& mesh = pVal->getStage()->descriptor()->mesh;
-  if (isParallelTypeDeviceDim(pVal->getOriginalVal()
-                                  ->as<TensorView>()
-                                  ->getRootDomain()
-                                  .at(0)
-                                  ->getParallelType())) {
-    for (DeviceIdxType j : c10::irange(mesh.vector().size())) {
-      buffer = {tensor.index({j, "..."})};
-      auto sender = mesh.vector().at(j);
+class PipelineTest : public MultiDeviceTest {
+ protected:
+  // Send a possibly sharded tensor represented by a PipelineVal
+  // to one "tester" device
+  void SendToTester(
+      PipelineVal* pVal,
+      at::Tensor tensor,
+      DeviceIdxType tester) {
+    std::vector<at::Tensor> buffer;
+    auto& mesh = pVal->getStage()->descriptor()->mesh;
+    if (isParallelTypeDeviceDim(pVal->getOriginalVal()
+                                    ->as<TensorView>()
+                                    ->getRootDomain()
+                                    .at(0)
+                                    ->getParallelType())) {
+      for (DeviceIdxType j : c10::irange(mesh.vector().size())) {
+        buffer = {tensor.index({j, "..."})};
+        auto sender = mesh.vector().at(j);
+        if (tester != sender &&
+            (communicator->deviceId() == sender || communicator->deviceId() == tester)) {
+          communicator->sendRecv(tester, sender, buffer)->wait();
+        }
+      }
+    } else {
+      buffer = {tensor};
+      auto sender = mesh.vector().at(0);
       if (tester != sender &&
-          (comm.deviceId() == sender || comm.deviceId() == tester)) {
-        comm.sendRecv(tester, sender, buffer)->wait();
+          (communicator->deviceId() == sender || communicator->deviceId() == tester)) {
+        communicator->sendRecv(tester, sender, buffer)->wait();
       }
     }
-  } else {
-    buffer = {tensor};
-    auto sender = mesh.vector().at(0);
-    if (tester != sender &&
-        (comm.deviceId() == sender || comm.deviceId() == tester)) {
-      comm.sendRecv(tester, sender, buffer)->wait();
+  }
+
+  // Utility function used for validation in the tests
+  // It compares the given (possibly sharded) output with the result of the Fusion
+  // run on a single device with the given (possibly sharded) inputs
+  void testValidateMultidevice(
+      std::unique_ptr<Fusion> fusion_ptr,
+      MultiDeviceRuntime& runtime,
+      const at::ArrayRef<c10::IValue>& inputs,
+      const std::vector<at::Tensor>& outputs,
+      bool print = false,
+      DeviceIdxType tester = 0,
+      bool validate = true,
+      bool set_mem_type_to_global = true,
+      bool auto_schedule = false) {
+    // gathering all the inputs at tester
+    for (auto i : c10::irange(inputs.size())) {
+      SendToTester(
+          runtime.pipeline()->inputs().at(i)->as<PipelineVal>(),
+          inputs.at(i).toTensor(),
+          tester);
+    }
+
+    // gathering all the outputs at tester
+    for (auto i : c10::irange(outputs.size())) {
+      SendToTester(
+          runtime.pipeline()->outputs().at(i)->as<PipelineVal>(),
+          outputs.at(i),
+          tester);
+    }
+
+    if (communicator->deviceId() == tester) {
+      if (print) {
+        std::stringstream ss;
+        std::string indent = "  ";
+        ss << "Obtained final outputs:{\n";
+        for (auto& t : outputs) {
+          ss << indent << t;
+        }
+        ss << "\n}";
+        std::cout << ss.str() << std::endl;
+      }
+
+      // sets all the memory type to global to avoid an execution error
+      if (set_mem_type_to_global) {
+        for (auto tv : ir_utils::filterByType<TensorView>(fusion_ptr->vals())) {
+          tv->setMemoryType(MemoryType::Global);
+        }
+      }
+
+      // execute the fusion on one device without pipeline scheduling
+      std::vector<at::Tensor> ref_outputs;
+      Fusion& fusion = *fusion_ptr.get();
+      if (auto_schedule) {
+        FusionExecutorCache fec(std::move(fusion_ptr));
+        ref_outputs = fec.runFusionWithInputs(inputs);
+      } else {
+        FusionExecutor fe;
+        fe.compileFusion(&fusion, inputs);
+        ref_outputs = fe.runFusion(inputs);
+      }
+
+      if (print) {
+        std::stringstream ss;
+        std::string indent = "  ";
+        ss << "Expected outputs:{\n";
+        for (auto& t : ref_outputs) {
+          ss << indent << t;
+        }
+        ss << "\n}";
+        std::cout << ss.str() << std::endl;
+      }
+
+      if (validate) {
+        testValidate(&fusion, outputs, inputs, ref_outputs, __LINE__, __FILE__);
+      }
     }
   }
-}
 
-// Utility function used for validation in the tests
-// It compares the given (possibly sharded) output with the result of the Fusion
-// run on a single device with the given (possibly sharded) inputs
-void testValidateMultidevice(
-    std::unique_ptr<Fusion> fusion_ptr,
-    MultiDeviceRuntime& runtime,
-    const at::ArrayRef<c10::IValue>& inputs,
-    const std::vector<at::Tensor>& outputs,
-    bool print = false,
-    DeviceIdxType tester = 0,
-    bool validate = true,
-    bool set_mem_type_to_global = true,
-    bool auto_schedule = false) {
-  // gathering all the inputs at tester
-  for (auto i : c10::irange(inputs.size())) {
-    SendToTester(
-        runtime.pipeline()->inputs().at(i)->as<PipelineVal>(),
-        inputs.at(i).toTensor(),
-        tester,
-        runtime.comm());
-  }
+  // Utility function used in the test to run and validate a given pipeline
+  // with given (possibly sharded) inputs
+  void executeAndTestPipeline(
+      std::unique_ptr<Fusion> fusion_ptr,
+      Pipeline& pipeline,
+      std::vector<c10::IValue>& inputs,
+      bool print = false) {
+    if (print && !communicator->deviceId()) {
+      fusion_ptr->printKernel();
+      std::cout << pipeline.toString() << std::endl;
+    }
 
-  // gathering all the outputs at tester
-  for (auto i : c10::irange(outputs.size())) {
-    SendToTester(
-        runtime.pipeline()->outputs().at(i)->as<PipelineVal>(),
-        outputs.at(i),
-        tester,
-        runtime.comm());
-  }
+    MultiDeviceRuntime runtime(&pipeline, *communicator);
+    auto error_msg = runtime.validate();
+    if (error_msg != "") {
+      GTEST_SKIP() << error_msg;
+    }
 
-  if (runtime.comm().deviceId() == tester) {
+    auto outputs = runtime.runWithInput(inputs);
+
     if (print) {
       std::stringstream ss;
       std::string indent = "  ";
-      ss << "Obtained final outputs:{\n";
+      ss << "Device " << communicator->deviceId() << "'s outputs:{\n";
       for (auto& t : outputs) {
         ss << indent << t;
       }
@@ -125,89 +184,26 @@ void testValidateMultidevice(
       std::cout << ss.str() << std::endl;
     }
 
-    // sets all the memory type to global to avoid an execution error
-    if (set_mem_type_to_global) {
-      for (auto tv : ir_utils::filterByType<TensorView>(fusion_ptr->vals())) {
-        tv->setMemoryType(MemoryType::Global);
-      }
-    }
+    testValidateMultidevice(
+        std::move(fusion_ptr), runtime, inputs, outputs, print);
 
-    // execute the fusion on one device without pipeline scheduling
-    std::vector<at::Tensor> ref_outputs;
-    Fusion& fusion = *fusion_ptr.get();
-    if (auto_schedule) {
-      FusionExecutorCache fec(std::move(fusion_ptr));
-      ref_outputs = fec.runFusionWithInputs(inputs);
-    } else {
-      FusionExecutor fe;
-      fe.compileFusion(&fusion, inputs);
-      ref_outputs = fe.runFusion(inputs);
-    }
-
-    if (print) {
-      std::stringstream ss;
-      std::string indent = "  ";
-      ss << "Expected outputs:{\n";
-      for (auto& t : ref_outputs) {
-        ss << indent << t;
-      }
-      ss << "\n}";
-      std::cout << ss.str() << std::endl;
-    }
-
-    if (validate) {
-      testValidate(&fusion, outputs, inputs, ref_outputs, __LINE__, __FILE__);
-    }
-  }
-}
-
-// Utility function used in the test to run and validate a given pipeline
-// with given (possibly sharded) inputs
-void executeAndTestPipeline(
-    std::unique_ptr<Fusion> fusion_ptr,
-    Pipeline& pipeline,
-    Communicator& comm,
-    std::vector<c10::IValue>& inputs,
-    bool print = false) {
-  if (print && !comm.deviceId()) {
-    fusion_ptr->printKernel();
-    std::cout << pipeline.toString() << std::endl;
+    communicator->barrier();
   }
 
-  MultiDeviceRuntime runtime(&pipeline, comm);
-  auto error_msg = runtime.validate();
-  if (error_msg != "") {
-    GTEST_SKIP() << error_msg;
-  }
+  static Communicator* communicator;
+};
 
-  auto outputs = runtime.runWithInput(inputs);
-
-  if (print) {
-    std::stringstream ss;
-    std::string indent = "  ";
-    ss << "Device " << comm.deviceId() << "'s outputs:{\n";
-    for (auto& t : outputs) {
-      ss << indent << t;
-    }
-    ss << "\n}";
-    std::cout << ss.str() << std::endl;
-  }
-
-  testValidateMultidevice(
-      std::move(fusion_ptr), runtime, inputs, outputs, print);
-
-  comm.barrier();
-}
+Communicator* PipelineTest::communicator = nullptr;
 
 /* To run the following tests on several devices, pytorch must be installed
    with the flag USE_DISTRIBUTED=1 and nccl support.
    Then simply run the tests on several processes, for example using mpirun
    on a node having at least 6 GPUs,
    e.g.: mpirun -np 6 build/nvfuser_tests
-   --gtest_filter=MultiDeviceTest.Pipeline
+   --gtest_filter=PipelineTest.Pipeline
 */
 
-TEST_F(MultiDeviceTest, Pipeline) {
+TEST_F(PipelineTest, Pipeline) {
   // ===========================================================
   //        FUSION
   // ===========================================================
@@ -287,45 +283,15 @@ TEST_F(MultiDeviceTest, Pipeline) {
   // Create input tensors.
   // Note: each process is binded to a different GPU
   c10::TensorOptions options =
-      at::TensorOptions().dtype(at::kFloat).device(comm.device());
+      at::TensorOptions().dtype(at::kFloat).device(communicator->device());
   // Note: the concrete values are only used at the relevant ranks
   std::vector<c10::IValue> inputs{
       at::randn({3096, 1123}, options), at::randn({2048, 73, 81}, options)};
 
-  executeAndTestPipeline(std::move(fusion_ptr), pipeline, comm, inputs);
+  executeAndTestPipeline(std::move(fusion_ptr), pipeline, inputs);
 }
 
-TEST_F(MultiDeviceTest, Didx) {
-  std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
-  Fusion& fusion = *fusion_ptr.get();
-  FusionGuard fg(&fusion);
-
-  TensorView* tv0 = makeContigTensor(1);
-  fusion.addInput(tv0);
-  TensorView* tv1 = add(tv0, tv0);
-  tv0->axis(0)->parallelize(ParallelType::DIDx);
-  tv1->axis(0)->parallelize(ParallelType::DIDx);
-  fusion.addOutput(tv1);
-
-  // fusion.printKernel();
-
-  if (!comm.is_available())
-    GTEST_SKIP() << "distributed setting not available";
-
-  c10::TensorOptions options =
-      at::TensorOptions().dtype(at::kFloat).device(comm.device());
-  std::vector<c10::IValue> inputs{at::ones({4}, options) + comm.deviceId()};
-
-  FusionExecutor fe;
-  fe.compileFusion(fusion_ptr.get(), inputs);
-  auto ref_outputs = fe.runFusion(inputs);
-
-  if (comm.is_available()) {
-    comm.barrier();
-  }
-}
-
-TEST_F(MultiDeviceTest, Pipeline_Gather) {
+TEST_F(PipelineTest, Pipeline_Gather) {
   std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
   Fusion& fusion = *fusion_ptr.get();
   FusionGuard fg(&fusion);
@@ -352,13 +318,13 @@ TEST_F(MultiDeviceTest, Pipeline_Gather) {
   Pipeline pipeline(&fusion, std::move(descriptor));
 
   c10::TensorOptions options =
-      at::TensorOptions().dtype(at::kFloat).device(comm.device());
-  std::vector<c10::IValue> inputs{at::ones({2, 11}, options) * comm.deviceId()};
+      at::TensorOptions().dtype(at::kFloat).device(communicator->device());
+  std::vector<c10::IValue> inputs{at::ones({2, 11}, options) * communicator->deviceId()};
 
-  executeAndTestPipeline(std::move(fusion_ptr), pipeline, comm, inputs);
+  executeAndTestPipeline(std::move(fusion_ptr), pipeline, inputs);
 }
 
-TEST_F(MultiDeviceTest, Pipeline_Gather2) {
+TEST_F(PipelineTest, Pipeline_Gather2) {
   std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
   Fusion& fusion = *fusion_ptr.get();
   FusionGuard fg(&fusion);
@@ -388,14 +354,14 @@ TEST_F(MultiDeviceTest, Pipeline_Gather2) {
   Pipeline pipeline(&fusion, std::move(descriptor));
 
   c10::TensorOptions options =
-      at::TensorOptions().dtype(at::kFloat).device(comm.device());
+      at::TensorOptions().dtype(at::kFloat).device(communicator->device());
   std::vector<c10::IValue> inputs{
-      at::ones({4, 3, 2, 5}, options) * comm.deviceId()};
+      at::ones({4, 3, 2, 5}, options) * communicator->deviceId()};
 
-  executeAndTestPipeline(std::move(fusion_ptr), pipeline, comm, inputs);
+  executeAndTestPipeline(std::move(fusion_ptr), pipeline, inputs);
 }
 
-TEST_F(MultiDeviceTest, Pipeline_GatherMultipleDestinations) {
+TEST_F(PipelineTest, Pipeline_GatherMultipleDestinations) {
   std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
   Fusion& fusion = *fusion_ptr.get();
   FusionGuard fg(&fusion);
@@ -424,14 +390,14 @@ TEST_F(MultiDeviceTest, Pipeline_GatherMultipleDestinations) {
   Pipeline pipeline(&fusion, std::move(descriptor));
 
   c10::TensorOptions options =
-      at::TensorOptions().dtype(at::kFloat).device(comm.device());
+      at::TensorOptions().dtype(at::kFloat).device(communicator->device());
   std::vector<c10::IValue> inputs{
-      at::ones({4, 3, 2, 5}, options) * comm.deviceId()};
+      at::ones({4, 3, 2, 5}, options) * communicator->deviceId()};
 
-  executeAndTestPipeline(std::move(fusion_ptr), pipeline, comm, inputs);
+  executeAndTestPipeline(std::move(fusion_ptr), pipeline, inputs);
 }
 
-TEST_F(MultiDeviceTest, Pipeline_GatherToExternalRoot) {
+TEST_F(PipelineTest, Pipeline_GatherToExternalRoot) {
   std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
   Fusion& fusion = *fusion_ptr.get();
   FusionGuard fg(&fusion);
@@ -461,14 +427,14 @@ TEST_F(MultiDeviceTest, Pipeline_GatherToExternalRoot) {
   Pipeline pipeline(&fusion, std::move(descriptor));
 
   c10::TensorOptions options =
-      at::TensorOptions().dtype(at::kFloat).device(comm.device());
+      at::TensorOptions().dtype(at::kFloat).device(communicator->device());
   std::vector<c10::IValue> inputs{
-      at::ones({3, 3, 2, 5}, options) * comm.deviceId()};
+      at::ones({3, 3, 2, 5}, options) * communicator->deviceId()};
 
-  executeAndTestPipeline(std::move(fusion_ptr), pipeline, comm, inputs);
+  executeAndTestPipeline(std::move(fusion_ptr), pipeline, inputs);
 }
 
-TEST_F(MultiDeviceTest, Pipeline_AllGather) {
+TEST_F(PipelineTest, Pipeline_AllGather) {
   std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
   Fusion& fusion = *fusion_ptr.get();
   FusionGuard fg(&fusion);
@@ -498,14 +464,14 @@ TEST_F(MultiDeviceTest, Pipeline_AllGather) {
   Pipeline pipeline(&fusion, std::move(descriptor));
 
   c10::TensorOptions options =
-      at::TensorOptions().dtype(at::kFloat).device(comm.device());
+      at::TensorOptions().dtype(at::kFloat).device(communicator->device());
   std::vector<c10::IValue> inputs{
-      at::ones({4, 3, 2, 5}, options) * comm.deviceId()};
+      at::ones({4, 3, 2, 5}, options) * communicator->deviceId()};
 
-  executeAndTestPipeline(std::move(fusion_ptr), pipeline, comm, inputs);
+  executeAndTestPipeline(std::move(fusion_ptr), pipeline, inputs);
 }
 
-TEST_F(MultiDeviceTest, Pipeline_Scatter) {
+TEST_F(PipelineTest, Pipeline_Scatter) {
   std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
   Fusion& fusion = *fusion_ptr.get();
   FusionGuard fg(&fusion);
@@ -531,13 +497,13 @@ TEST_F(MultiDeviceTest, Pipeline_Scatter) {
   Pipeline pipeline(&fusion, std::move(descriptor));
 
   c10::TensorOptions options =
-      at::TensorOptions().dtype(at::kFloat).device(comm.device());
-  std::vector<c10::IValue> inputs{at::ones({4, 5}, options) * comm.deviceId()};
+      at::TensorOptions().dtype(at::kFloat).device(communicator->device());
+  std::vector<c10::IValue> inputs{at::ones({4, 5}, options) * communicator->deviceId()};
 
-  executeAndTestPipeline(std::move(fusion_ptr), pipeline, comm, inputs);
+  executeAndTestPipeline(std::move(fusion_ptr), pipeline, inputs);
 }
 
-TEST_F(MultiDeviceTest, Pipeline_ScatterToExternalRoot) {
+TEST_F(PipelineTest, Pipeline_ScatterToExternalRoot) {
   std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
   Fusion& fusion = *fusion_ptr.get();
   FusionGuard fg(&fusion);
@@ -563,13 +529,13 @@ TEST_F(MultiDeviceTest, Pipeline_ScatterToExternalRoot) {
   Pipeline pipeline(&fusion, std::move(descriptor));
 
   c10::TensorOptions options =
-      at::TensorOptions().dtype(at::kFloat).device(comm.device());
-  std::vector<c10::IValue> inputs{at::ones({3, 5}, options) * comm.deviceId()};
+      at::TensorOptions().dtype(at::kFloat).device(communicator->device());
+  std::vector<c10::IValue> inputs{at::ones({3, 5}, options) * communicator->deviceId()};
 
-  executeAndTestPipeline(std::move(fusion_ptr), pipeline, comm, inputs);
+  executeAndTestPipeline(std::move(fusion_ptr), pipeline, inputs);
 }
 
-TEST_F(MultiDeviceTest, Pipeline_BcastBothSidesParallelized) {
+TEST_F(PipelineTest, Pipeline_BcastBothSidesParallelized) {
   std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
   Fusion& fusion = *fusion_ptr.get();
   FusionGuard fg(&fusion);
@@ -596,13 +562,13 @@ TEST_F(MultiDeviceTest, Pipeline_BcastBothSidesParallelized) {
   Pipeline pipeline(&fusion, std::move(descriptor));
 
   c10::TensorOptions options =
-      at::TensorOptions().dtype(at::kFloat).device(comm.device());
-  std::vector<c10::IValue> inputs{at::ones({4, 5}, options) * comm.deviceId()};
+      at::TensorOptions().dtype(at::kFloat).device(communicator->device());
+  std::vector<c10::IValue> inputs{at::ones({4, 5}, options) * communicator->deviceId()};
 
-  executeAndTestPipeline(std::move(fusion_ptr), pipeline, comm, inputs);
+  executeAndTestPipeline(std::move(fusion_ptr), pipeline, inputs);
 }
 
-TEST_F(MultiDeviceTest, Pipeline_BcastLocalCopies) {
+TEST_F(PipelineTest, Pipeline_BcastLocalCopies) {
   std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
   Fusion& fusion = *fusion_ptr.get();
   FusionGuard fg(&fusion);
@@ -637,11 +603,11 @@ TEST_F(MultiDeviceTest, Pipeline_BcastLocalCopies) {
   Pipeline pipeline(&fusion, std::move(descriptor));
 
   c10::TensorOptions options =
-      at::TensorOptions().dtype(at::kFloat).device(comm.device());
+      at::TensorOptions().dtype(at::kFloat).device(communicator->device());
   std::vector<c10::IValue> inputs{
-      at::ones({4, 5, 7, 3, 2}, options) * comm.deviceId()};
+      at::ones({4, 5, 7, 3, 2}, options) * communicator->deviceId()};
 
-  executeAndTestPipeline(std::move(fusion_ptr), pipeline, comm, inputs);
+  executeAndTestPipeline(std::move(fusion_ptr), pipeline, inputs);
 }
 
 } // namespace nvfuser
