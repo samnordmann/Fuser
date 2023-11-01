@@ -825,6 +825,103 @@ TEST_F(MultiDeviceTest, Pipeline_ReduceScatter) {
   executeAndTestPipeline(std::move(fusion_ptr), pipeline, comm, inputs);
 }
 
+
+TEST_F(MultiDeviceTest, Overlap) {
+  // In this example we demonstrate how we can apply the optimization
+  // described in 
+  // Overlap Communication with Dependent Computation via Decomposition in Large Deep Learning Models (acm.org)
+  // https://dl.acm.org/doi/pdf/10.1145/3567955.3567959
+  // We simplify the setting as much as possible by considering a multi-device Pipeline with
+  // a simple "Gather" followed by a dependent compute. The paper suggest to slice those
+  // two operation and to interleave them to achieve better overlap. Consider the following Pipeline:
+
+  // /* Stage 0 */
+  // TensorView* tv0 = makeContigTensor(3);
+  // fusion.addInput(tv0);
+  // TensorView* tv1 = sum(tv0, {2});
+  // /* Stage 1 */
+  // TensorView* tv2 = set(tv1); // is lowered to a "Gather" communication
+  // TensorView* tv3 = sum(tv2, {1});
+  // fusion.addOutput(tv3);
+
+  // tv0->axis(0)->parallelize(ParallelType::DIDx);
+  // tv1->axis(0)->parallelize(ParallelType::DIDx);
+
+  // PipelineStageDescriptor stage0, stage1;
+  // stage0.addVal({tv0, tv1});
+  // stage1.addVal({tv2, tv3});
+
+  // stage0.mesh = {0, 1, 2, 3, 4, 5, 6, 7};
+  // stage0.auto_schedule = false;
+  // stage1.mesh = {0};
+  // stage1.auto_schedule = false;
+
+  const int64_t number_of_devices = comm.size();
+  constexpr int64_t number_of_slices = 4;
+  constexpr int64_t extent_of_axis2 = 1024;
+  constexpr int64_t extent_of_slice = extent_of_axis2 / number_of_slices;
+  const std::vector<int64_t> input_extents = {number_of_devices, 7, extent_of_axis2, 3};
+  assert(!(extent_of_axis2 % number_of_slices)); // for simplicity
+
+  std::unique_ptr<Fusion> fusion_ptr = std::make_unique<Fusion>();
+  Fusion& fusion = *fusion_ptr.get();
+  FusionGuard fg(&fusion);
+
+  PipelineStageDescriptor stage0, stage1;
+  // containers used later for adding ranges of tvs directly to the stages
+  std::unordered_set<Val*> from_stage0, from_stage1;
+  std::vector<Val*> to_stage0, to_stage1;
+
+  TensorView* tv0 = makeConcreteTensor(input_extents);
+  fusion.addInput(tv0);
+  TensorView* tv1 = sum(tv0, {3});
+  from_stage0.insert(tv0);
+  tv0->axis(0)->parallelize(ParallelType::DIDx);
+  tv1->axis(0)->parallelize(ParallelType::DIDx);
+
+  TensorView *tv1x, *tv2x, *tv3x;
+  std::vector<TensorView*> tv3_slices;
+  std::vector<Slice> slices {3};
+  for (int i = 0; i < number_of_slices; i++) {
+    slices.at(2).start = IrBuilder::create<Val>(i * extent_of_slice);
+    slices.at(2).stop = IrBuilder::create<Val>((i+1) * extent_of_slice);
+    tv1x = slice(tv1, slices);
+    tv1x->axis(0)->parallelize(ParallelType::DIDx);
+    to_stage0.push_back(tv1x);
+
+    tv2x = set(tv1x);
+    from_stage1.insert(tv2x);
+    tv3x = sum(tv2x, {1});
+    tv3_slices.push_back(tv3x);
+  }
+  TensorView* tv3 = cat(tv3_slices, 1);
+  fusion.addOutput(tv3);
+  to_stage1.push_back(tv3);
+
+  //instead of using "slice/cat" it would be nicer to split the dimension and use "select/stack", but "stack" is not implemented in nvFuser at the moment
+
+  stage0.addRange(fusion_ptr.get(), from_stage0, to_stage0);
+  stage1.addRange(fusion_ptr.get(), from_stage1, to_stage1);
+  std::vector<DeviceIdxType> devices(number_of_devices);
+  std::iota(devices.begin(), devices.end(), 0);
+  stage0.mesh = devices;
+  stage0.auto_schedule = false;
+  stage1.mesh = {0};
+  stage1.auto_schedule = false;
+
+  PipelineDescriptor descriptor {
+      .stage_descriptors{std::move(stage0), std::move(stage1)}};
+
+  Pipeline pipeline(&fusion, std::move(descriptor));
+
+  c10::TensorOptions options =
+      at::TensorOptions().dtype(at::kFloat).device(comm.device());
+  std::vector<c10::IValue> inputs{at::ones(input_extents, options) * (comm.deviceId() + 1)};
+
+  executeAndTestPipeline(std::move(fusion_ptr), pipeline, comm, inputs, true);
+}
+
+
 } // namespace nvfuser
 
 #endif
