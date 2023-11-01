@@ -34,17 +34,6 @@ void PipelineExecutor::handle(PipelineStage* stage) {
     NVF_ERROR(val_to_IValue_.at(input_val).isTensor());
     stage_input_IValues.push_back(val_to_IValue_.at(input_val));
   }
-  // if (!runtime_.comm_.deviceId())
-  //   std::cout << "stage "
-  //             << stage->toString()
-  //             << " with "
-  //             << stage->inputs().size()
-  //             << "  input\n"
-  //             << stage->inputs().at(0)->as<PipelineVal>()->getOriginalVal()->toString()
-  //             << "\nwith value\n"
-  //             << stage_input_IValues.at(0)
-  //             << std::endl;
-
   std::vector<at::Tensor> outputs;
 
   // Compile the stage and either execute it or allocate output buffers
@@ -59,10 +48,6 @@ void PipelineExecutor::handle(PipelineStage* stage) {
               runtime_.pipeline_->stageToFusion(stage)));
     }
     // Run the stage to get concrete outputs or placeholders
-    // TODO: reimplement allocOutputSpace
-    // TODO: allocate output space only if strictly necessary,
-    //       and move the allocation to
-    //       PipelineExecutor::handle(PipelineCommunication*)
     outputs = fec_[stage]->runFusionWithInputs(stage_input_IValues);
 
   } else {
@@ -73,6 +58,7 @@ void PipelineExecutor::handle(PipelineStage* stage) {
           runtime_.pipeline_->stageToFusion(stage).get(), stage_input_IValues);
     }
     // Run the stage to get concrete outputs or placeholders
+    // TODO: deal with aliases I/O. For example if the stage is empty, i.e., Inputs=Outputs, we need to handle them anyway
     outputs = fe_[stage]->runFusion(stage_input_IValues);
   }
 
