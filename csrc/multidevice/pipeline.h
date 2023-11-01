@@ -86,6 +86,10 @@ class TORCH_CUDA_CU_API PipelineStageDescriptor final {
     }
   }
 
+  void addRange(Fusion* fusion,
+      const std::unordered_set<Val*>& from,
+      const std::vector<Val*>& to);
+
  private:
   // stores the Vals belonging to the Stage
   ValSet vals_;

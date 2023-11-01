@@ -17,6 +17,25 @@ namespace nvfuser {
 
 int PipelineStageDescriptor::running_unique_id_ = 0;
 
+namespace {
+
+class ValRangeAdder : public IterVisitor {
+public:
+  void handle(TensorView* tv) override {
+    vals.push_back(tv);
+  }
+  std::vector<Val*> vals;
+};
+
+}
+
+void PipelineStageDescriptor::addRange(Fusion* fusion,
+  const std::unordered_set<Val*>& from,
+  const std::vector<Val*>& to) {
+    ValRangeAdder val_adder;
+    val_adder.traverseBetween(fusion, from, to);
+    addVal(val_adder.vals);
+}
 /* Utility class used for Pipeline instantiation called by the Pipeline's
   constructor. This class is responsible for:
   - checking that the parameters are valid
