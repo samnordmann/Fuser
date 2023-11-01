@@ -295,6 +295,14 @@ std::unique_ptr<Fusion> Pipeline::stageToFusion(PipelineStage*& stage) const {
             output->as<PipelineVal>()->getOriginalVal()));
       });
 
+  // set the I/O memory type to global
+  for (auto val: fusion_copy->inputs()) {
+      val->as<TensorView>()->setMemoryType(MemoryType::Global);
+  }
+  for (auto val: fusion_copy->outputs()) {
+      val->as<TensorView>()->setMemoryType(MemoryType::Global);
+  }
+
   return fusion_copy;
 }
 
