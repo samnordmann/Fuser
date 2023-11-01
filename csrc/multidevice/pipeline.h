@@ -75,12 +75,12 @@ class TORCH_CUDA_CU_API PipelineStageDescriptor final {
   const int unique_id;
 
   // returns all the Vals belonging to the Stage
-  auto vals() const {
+  const auto& vals() const {
     return vals_;
   }
 
   // add a Val to the Stage
-  void addVal(std::vector<Val*> vals) {
+  void addVal(const std::vector<Val*>& vals) {
     for (auto& val : vals) {
       vals_.pushBack(val);
     }
