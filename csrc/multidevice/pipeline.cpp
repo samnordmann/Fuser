@@ -154,7 +154,7 @@ class PipelineBuilder final {
         // Add Vals which are produced in-between stages
         if (val->definition()) {
           for (auto& val_producer : val->definition()->inputs()) {
-            if (!stage_desc.vals().has(val_producer)) {
+            if (val_producer->isA<TensorView>() && !stage_desc.vals().has(val_producer)) {
               stage_input_desc_[&stage_desc].pushBack(val);
               val_consumer_stage_desc_[val_producer].push_back(&stage_desc);
             }
@@ -187,8 +187,8 @@ class PipelineBuilder final {
         // then add the newly created PipelineVal as an input of the pipeline
         if (isGlobalInput(val)) {
           pipeline_->addInput(p_val);
-        } else {
-          // if the Val is a stage input but not a global input, it must be
+        } else if (val->isA<TensorView>()) {
+          // if the TensorView is a stage input but not a global input, it must be
           // defined by a "Set" operation
           NVF_ERROR(
               ((val->definition()->isA<LoadStoreOp>()) &&
@@ -197,7 +197,7 @@ class PipelineBuilder final {
                    ||
                 val->definition()->isA<ReductionOp>(),
               "A Val that is the input of a stage must be defined by a LoadStoreOp expression of type Set"
-              "but here the definition is " +
+              " or a Reduction but here the definition is " +
                   val->definition()->toString());
         }
       }
