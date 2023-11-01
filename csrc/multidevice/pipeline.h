@@ -90,6 +90,8 @@ class TORCH_CUDA_CU_API PipelineStageDescriptor final {
       const std::unordered_set<Val*>& from,
       const std::vector<Val*>& to);
 
+  std::string toString() const;
+
  private:
   // stores the Vals belonging to the Stage
   ValSet vals_;

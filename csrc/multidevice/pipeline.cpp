@@ -36,6 +36,22 @@ void PipelineStageDescriptor::addRange(Fusion* fusion,
     val_adder.traverseBetween(fusion, from, to);
     addVal(val_adder.vals);
 }
+
+std::string PipelineStageDescriptor::toString() const {
+  std::stringstream ss;
+  std::string indent1 = "  ";
+  std::string indent2 = "    ";
+  ss << "stage " << unique_id << ": {\n";
+  ss << indent1 + "auto_schedule: " << auto_schedule << ",\n";
+  ss << indent1 + "vals:{\n";
+    for (const auto& val: vals()){
+      ss << indent2 << val << ",\n";
+    }
+    ss << indent1  + "}";
+    ss << "}";
+  return ss.str();
+}
+
 /* Utility class used for Pipeline instantiation called by the Pipeline's
   constructor. This class is responsible for:
   - checking that the parameters are valid
