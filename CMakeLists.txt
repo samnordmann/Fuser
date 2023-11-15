@@ -402,6 +402,7 @@ if(BUILD_TEST)
     ${NVFUSER_ROOT}/test/test_gpu_utils.cpp
     ${NVFUSER_ROOT}/test/test_gpu_indexing_ops.cpp
     ${NVFUSER_ROOT}/test/test_gpu_indexing.cpp
+    ${NVFUSER_ROOT}/test/test_multidevice_megatron.cpp
     ${NVFUSER_ROOT}/test/test_multidevice_pipeline.cpp
     ${NVFUSER_ROOT}/test/test_multidevice_communications.cpp
     ${NVFUSER_ROOT}/test/test_combined_inner_outer_reduction.cpp

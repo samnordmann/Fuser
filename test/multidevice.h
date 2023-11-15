@@ -61,6 +61,15 @@ class CommunicationTest : public MultiDeviceTest {
   std::vector<DeviceIdxType> all_ranks;
 };
 
+// class PipelineTest : public MultiDeviceTest {
+//  protected:
+//   void SetUp() override;
+//   void validate();
+//   std::unique_ptr<Pipeline> pipeline;
+//   std::unique_ptr<Fusion> fusion;
+//   std::vector<c10::IValue> inputs;
+// };
+
 class PipelineTest : public MultiDeviceTest {
  protected:
   void SetUp() override;
