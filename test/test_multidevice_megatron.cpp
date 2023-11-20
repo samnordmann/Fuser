@@ -43,6 +43,10 @@ TensorView* Matmul(TensorView* tv0, TensorView* tv1, PipelineStageDescriptor& st
 TEST_F(PipelineTest, MegatronMLP) {
   FusionGuard fg(fusion.get());
   PipelineStageDescriptor stage0;
+  int num_devices = 4;
+  std::vector<DeviceIdxType> device_mesh({0, 1, 2, 3});
+
+  stage0.mesh = device_mesh;
   TensorView* tvx = makeContigTensor(2); // (N,K)
   TensorView* tva = makeContigTensor(2); // (K,M)
   TensorView* tvb = makeContigTensor(2); // (M,O)
@@ -53,9 +57,13 @@ TEST_F(PipelineTest, MegatronMLP) {
 
   // Matmul 1: tvx x tva -> y (N,M)
   TensorView* tvx_b = broadcast(tvx, {false, false, true}); // (N,K,M)
+  tvx_b->split(0, num_devices, false); // (D,N//D,K,M)
   TensorView* tva_b = broadcast(tva, {true, false, false}); // (N,K,M)
+  tva_b->split(0, num_devices, false); // (D,N//D,K,M)
   TensorView* tvxa = mul(tvx_b, tva_b); // (N,K,M)
+  tvxa->split(0, num_devices, false); // (D,N//D,K,M)
   TensorView* tvy = sum(tv_xa, {1}); // (N,M)
+  tvy->split(0, num_devices, false); // (D,N//D,M)
   stage0.addVal({tvx_b, tvx_b, tvxa, tvy});
 
   // Matmul 1 sharding: Dimension N sharded
@@ -66,38 +74,48 @@ TEST_F(PipelineTest, MegatronMLP) {
   tvy->axis(0)->parallelize(ParallelType::DIDx); // column-wise
 
   // Matmul 2: y x tvb -> z (N,O)
-  TensorView* tvy_b = broadcast(tvy, {false, false, true}); // (N,M,O)
+  TensorView* tvy_b = broadcast(tvy, {false, false, false, true}); // (D,N//D,M,O)
+  tvy_b->split(2, num_devices, false); //(D,N//D,D,M//D,O)
   TensorView* tvb_b = broadcast(tvb, {true, false, false}); // (N,M,O)
-  TensorView* tvyb = mul(tvy_b, tvb_b); // (N,M,O)
-  TensorView* tvz = sum(tvyb, {1}); // (N,O)
+  tv_b->split(0, num_devices, false); //(D,N//D,M,O)
+  tv_b->split(2, num_devices, false); //(D,N//D,D,M//D,O)
+  TensorView* tvyb = mul(tvy_b, tvb_b); // (D,N//D,D,M//D,O)
+  TensorView* tvz = sum(tvyb, {2,3}); // (D,N//D,O)
+  tvz->merge(0, 1) // (N,O)
   stage0.addVal({tvy_b, tvb_b, tvyb, tvz});
 
-  // Matmul 1 sharding: Dimension N and M sharded
+  // TODO: Need to shard multiple dimensions of a tensor along same axis
+  // TODO: check splitting dimensions
   tvb->axis(0)->parallelize(ParallelType::DIDx); // row-wise
-  // Shard two axes along DIDx
+  // Shard two axes along DIDx? What would happen?
   tvy_b->axis(0)->parallelize(ParallelType::DIDx);
-  tvy_b->axis(1)->parallelize(ParallelType::DIDx);
+  tvy_b->axis(2)->parallelize(ParallelType::DIDx);
   tvb_b->axis(0)->parallelize(ParallelType::DIDx);
-  tvb_b->axis(1)->parallelize(ParallelType::DIDx);
+  tvb_b->axis(2)->parallelize(ParallelType::DIDx);
   tvyb->axis(0)->parallelize(ParallelType::DIDx);
-  tvyb->axis(1)->parallelize(ParallelType::DIDx);
+  tvyb->axis(2)->parallelize(ParallelType::DIDx);
+
+  // Matmul 2: y x tvb -> z (N,O)
+  // TensorView* tvy_b = broadcast(tvy, {false, false, true}); // (N,M,O)
+  // TensorView* tvb_b = broadcast(tvb, {true, false, false}); // (N,M,O)
+  // TensorView* tvyb = mul(tvy_b, tvb_b); // (N,M,O)
+  // TensorView* tvz = sum(tvyb, {1}); // (N,O)
+  // stage0.addVal({tvy_b, tvb_b, tvyb, tvz});
+
+  // Matmul 1 sharding: Dimension N and M sharded
+  // tvb->axis(0)->parallelize(ParallelType::DIDx); // row-wise
+  // tvy_b->axis(0)->parallelize(ParallelType::DIDx);
+  // tvy_b->axis(1)->parallelize(ParallelType::DIDx);
+  // tvb_b->axis(0)->parallelize(ParallelType::DIDx);
+  // tvb_b->axis(1)->parallelize(ParallelType::DIDx);
+  // tvyb->axis(0)->parallelize(ParallelType::DIDx);
+  // tvyb->axis(1)->parallelize(ParallelType::DIDx);
 
 
   fusion->addInput(tvx);
   fusion->addInput(tva);
   fusion->addInput(tvb);
   fusion->addOutput(tvz);
-
-  // Pipeline
-  int num_devices = 4;
-  std::vector<DeviceIdxType> device_mesh({0, 1, 2, 3});
-  stage0.mesh = device_mesh;
-
-  // Sharding 
-  // tvx, tvz are not sharded
-  tva->axis(0)->parallelize(ParallelType::DIDx); // column-wise
-  tvy->axis(0)->parallelize(ParallelType::DIDx); // column-wise
-  // tvb->axis(1)->parallelize(ParallelType::DIDx); // row-wise
 
   PipelineDescriptor descriptor {
       .stage_descriptors{std::move(stage0)}};
