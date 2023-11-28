@@ -36,9 +36,9 @@ TensorView* Matmul(TensorView* tv0, TensorView* tv1, PipelineStageDescriptor& st
 }
 
 // TODO: batch parallelism
-// Inputs: X[S,E], A[E,N], B[N,M]
-// Compute: Y = GeLU(Matmul(X, A)), Z = Matmul(Y, B)
-// matmul1: replicated x column-wise sharded -> columnwise sharded
+// Inputs: X[N,K], A[K,M], B[M,0]
+// Compute: Y = Matmul(X, A), Z = Matmul(Y, B)
+// matmul1: replicated x column-wise sharded -> column-wise sharded
 // matmul2: column-wise sharded x row-wise sharded -> replicated
 TEST_F(PipelineTest, MegatronMLP) {
   FusionGuard fg(fusion.get());
@@ -48,7 +48,7 @@ TEST_F(PipelineTest, MegatronMLP) {
 
   stage0.mesh = device_mesh;
   TensorView* tvx = makeContigTensor(2); // (N,K)
-  TensorView* tva = makeContigTensor(2); // (K,M)
+  TensorView* tva = makeContigTensor(2); // (K,M) 
   TensorView* tvb = makeContigTensor(2); // (M,O)
   stage0.addVal({tvx, tva, tvb});
 
@@ -57,60 +57,52 @@ TEST_F(PipelineTest, MegatronMLP) {
 
   // Matmul 1: tvx x tva -> y (N,M)
   TensorView* tvx_b = broadcast(tvx, {false, false, true}); // (N,K,M)
-  tvx_b->split(0, num_devices, false); // (D,N//D,K,M)
   TensorView* tva_b = broadcast(tva, {true, false, false}); // (N,K,M)
-  tva_b->split(0, num_devices, false); // (D,N//D,K,M)
   TensorView* tvxa = mul(tvx_b, tva_b); // (N,K,M)
-  tvxa->split(0, num_devices, false); // (D,N//D,K,M)
   TensorView* tvy = sum(tv_xa, {1}); // (N,M)
-  tvy->split(0, num_devices, false); // (D,N//D,M)
+
   stage0.addVal({tvx_b, tvx_b, tvxa, tvy});
 
   // Matmul 1 sharding: Dimension N sharded
-  tva->axis(0)->parallelize(ParallelType::DIDx); // column-wise
-  tvx_b->axis(0)->parallelize(ParallelType::DIDx);
-  tva_b->axis(0)->parallelize(ParallelType::DIDx);
-  tvxa->axis(0)->parallelize(ParallelType::DIDx);
-  tvy->axis(0)->parallelize(ParallelType::DIDx); // column-wise
+  // X not sharded
+  // A column-wise sharded
+  tvxa->split(1, num_devices, false); // (K, D, M//D)
+  tva->axis(1)->parallelize(ParallelType::DIDx); 
 
-  // Matmul 2: y x tvb -> z (N,O)
-  TensorView* tvy_b = broadcast(tvy, {false, false, false, true}); // (D,N//D,M,O)
-  tvy_b->split(2, num_devices, false); //(D,N//D,D,M//D,O)
+  // Intermediates tvx_b, tva_b, tvxa column-wise sharded
+  // TODO: propogate sharding from inputs
+  tvx_b->split(1, num_devices, false); // (D,N//D,K,M)
+  tvx_b->axis(1)->parallelize(ParallelType::DIDx);
+  tva_b->split(1, num_devices, false); // (D,N//D,K,M)
+  tva_b->axis(1)->parallelize(ParallelType::DIDx);
+  tvxa->axis(1)->split(0, num_devices, false) // (D,N//D,K,M)
+  tvxa->axis(1)->parallelize(ParallelType::DIDx);
+  
+  // Y column-wise sharded
+  tvy->split(1, num_devices, false); // (N,D,M//D)
+  tvy->axis(1)->parallelize(ParallelType::DIDx); 
+
+  // Matmul 2: y (N, M) x tvb (M, O) -> z (N,O)
+  TensorView* tvy_b = broadcast(tvy, {false, false, true}); // (N,M,O)
   TensorView* tvb_b = broadcast(tvb, {true, false, false}); // (N,M,O)
-  tv_b->split(0, num_devices, false); //(D,N//D,M,O)
-  tv_b->split(2, num_devices, false); //(D,N//D,D,M//D,O)
-  TensorView* tvyb = mul(tvy_b, tvb_b); // (D,N//D,D,M//D,O)
-  TensorView* tvz = sum(tvyb, {2,3}); // (D,N//D,O)
-  tvz->merge(0, 1) // (N,O)
+  TensorView* tvyb = mul(tvy_b, tvb_b); // (N,M,O)
+  TensorView* tvz = sum(tvyb, {1}); // (N,O)
+
+  // B row-wise sharded
+  tvb->split(0, num_devices, false); // (D,M//D,O)
+  tvb->axis(0)->parallelize(ParallelType::DIDx); 
+
+  // intermediates sharded along M
+  tvy_b->split(1, num_devices, false); // (N,D,M//D,O)
+  tvy_b->axis(1)->parallelize(ParallelType::DIDx);
+  tvb_b->split(1, num_devices, false); // (N,D,M//D,O)
+  tvb_b->axis(1)->parallelize(ParallelType::DIDx);
+  tvyb->split(1, num_devices, false); // (N,D,M//D,O)
+  tvyb->axis(1)->parallelize(ParallelType::DIDx);
+
+  // output Z is unsharded
+
   stage0.addVal({tvy_b, tvb_b, tvyb, tvz});
-
-  // TODO: Need to shard multiple dimensions of a tensor along same axis
-  // TODO: check splitting dimensions
-  tvb->axis(0)->parallelize(ParallelType::DIDx); // row-wise
-  // Shard two axes along DIDx? What would happen?
-  tvy_b->axis(0)->parallelize(ParallelType::DIDx);
-  tvy_b->axis(2)->parallelize(ParallelType::DIDx);
-  tvb_b->axis(0)->parallelize(ParallelType::DIDx);
-  tvb_b->axis(2)->parallelize(ParallelType::DIDx);
-  tvyb->axis(0)->parallelize(ParallelType::DIDx);
-  tvyb->axis(2)->parallelize(ParallelType::DIDx);
-
-  // Matmul 2: y x tvb -> z (N,O)
-  // TensorView* tvy_b = broadcast(tvy, {false, false, true}); // (N,M,O)
-  // TensorView* tvb_b = broadcast(tvb, {true, false, false}); // (N,M,O)
-  // TensorView* tvyb = mul(tvy_b, tvb_b); // (N,M,O)
-  // TensorView* tvz = sum(tvyb, {1}); // (N,O)
-  // stage0.addVal({tvy_b, tvb_b, tvyb, tvz});
-
-  // Matmul 1 sharding: Dimension N and M sharded
-  // tvb->axis(0)->parallelize(ParallelType::DIDx); // row-wise
-  // tvy_b->axis(0)->parallelize(ParallelType::DIDx);
-  // tvy_b->axis(1)->parallelize(ParallelType::DIDx);
-  // tvb_b->axis(0)->parallelize(ParallelType::DIDx);
-  // tvb_b->axis(1)->parallelize(ParallelType::DIDx);
-  // tvyb->axis(0)->parallelize(ParallelType::DIDx);
-  // tvyb->axis(1)->parallelize(ParallelType::DIDx);
-
 
   fusion->addInput(tvx);
   fusion->addInput(tva);
@@ -121,8 +113,6 @@ TEST_F(PipelineTest, MegatronMLP) {
       .stage_descriptors{std::move(stage0)}};
   pipeline = std::make_unique<Pipeline>(fusion.get(), std::move(descriptor));
 
-  // TODO: 1. reorder tvb so that outermost axis is DIDx
-  // 2. split tvs so that outermost dimension == num_devices
   int n = num_devices;
   int k = num_devices;
   int m = num_devices;
