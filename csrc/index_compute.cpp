@@ -1543,7 +1543,7 @@ std::vector<Val*> Index::getGlobalProducerStridedIndices(
   Val* cur_contig_stride = GpuLower::current()->kernel()->oneVal();
   for (const auto i : c10::irange(alloc_dom.size())) {
     auto dim = alloc_dom.size() - i - 1;
-    if (alloc_dom[dim]->isReduction()) {
+    if (alloc_dom[dim]->isReduction() || alloc_dom[dim]->isDeviceDim()) {
       continue;
     }
 
@@ -1906,7 +1906,8 @@ std::vector<Val*> Index::getStrides(TensorView* tv) {
   {
     int stride_i = 0;
     for (const auto i : c10::irange(alloc_dom.size())) {
-      if (alloc_dom[i]->isReduction() || alloc_dom[i]->isStride()) {
+      if (alloc_dom[i]->isReduction() || alloc_dom[i]->isStride()
+          || alloc_dom[i]->isDeviceDim()) {
         strides[i] = GpuLower::current()->kernel()->oneVal();
         continue;
       }
@@ -1920,7 +1921,8 @@ std::vector<Val*> Index::getStrides(TensorView* tv) {
   Val* cur_contig_stride = GpuLower::current()->kernel()->oneVal();
   for (const auto i : c10::irange(alloc_dom.size())) {
     auto dim = alloc_dom.size() - i - 1;
-    if (alloc_dom[dim]->isReduction() || alloc_dom[dim]->isStride()) {
+    if (alloc_dom[dim]->isReduction() || alloc_dom[dim]->isStride()
+      || alloc_dom[dim]->isDeviceDim()) {
       continue;
     }
 
@@ -1962,7 +1964,7 @@ std::vector<Val*> Index::getConsumerAllocationIndices(
     // See a comment in indexing to allocation domains in
     // getGlobalProducerIndex.
     if (alloc_dom[i]->isReduction() || alloc_dom[i]->isBroadcast() ||
-        alloc_dom[i]->isStride()) { //} || alloc_dom[i]->isDeviceDim()) {
+        alloc_dom[i]->isStride() || alloc_dom[i]->isDeviceDim()) {
       continue;
     }
 
@@ -2067,7 +2069,7 @@ std::vector<Val*> Index::getProducerAllocationIndices(
   for (const auto i : c10::irange(alloc_dom.size())) {
     auto override_it = override_index.find(alloc_dom[i]);
     const bool is_overriden = override_it != override_index.end();
-    if (alloc_dom[i]->isReduction() || //alloc_dom[i]->isDeviceDim() ||
+    if (alloc_dom[i]->isReduction() || alloc_dom[i]->isDeviceDim() ||
         (alloc_dom[i]->isBroadcast() && !is_overriden)) {
       continue;
     }

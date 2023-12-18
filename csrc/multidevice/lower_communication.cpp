@@ -96,6 +96,7 @@ CommParams createParamsForGatherScatter(
     DeviceIdxType my_device_index,
     DeviceIdxType root,
     const DeviceMesh& mesh, // is_scatter? receivers : senders
+    int sharded_dim, // is_scatter? output sharded dim : input sharded dim
     at::Tensor root_buf, // is_scatter? input buf : output buf
     at::Tensor buf, // is_scatter? output buf : input buf
     bool is_scatter) {
@@ -108,14 +109,14 @@ CommParams createParamsForGatherScatter(
   }
 
   if (mesh.has(my_device_index)) {
-    // auto sliced_buf = buf.index({0, "..."});
     ((is_scatter) ? params.dst_bufs : params.src_bufs) = {buf};
   }
 
   if (my_device_index == root) {
     for (auto i : c10::irange(mesh.vector().size())) {
-      auto x = root_buf.index({static_cast<int>(i), "..."}).view(buf.sizes());
-      ((is_scatter)? params.src_bufs : params.dst_bufs).push_back(x);
+      std::vector<at::indexing::TensorIndex> indices(root_buf.dim(), at::indexing::Slice());
+      indices[sharded_dim] = at::indexing::Slice(i, i+1);
+      ((is_scatter)? params.src_bufs : params.dst_bufs).push_back(root_buf.index(indices).contiguous());
     }
     // The scatter/gather semantics imposes the root to be both
     // sender and receiver. If the root is not in the mesh, we thus
@@ -135,6 +136,7 @@ void lowerToScatter(
     DeviceIdxType my_device_index,
     const DeviceMesh& sender_mesh,
     const DeviceMesh& receiver_mesh,
+    int output_sharded_dim,
     at::Tensor input_tensor,
     at::Tensor output_tensor,
     std::vector<std::shared_ptr<Communication>>& comms) {
@@ -144,7 +146,7 @@ void lowerToScatter(
     return;
   }
   auto params = createParamsForGatherScatter(
-      my_device_index, root, receiver_mesh, input_tensor, output_tensor, true);
+      my_device_index, root, receiver_mesh, output_sharded_dim, input_tensor, output_tensor, true);
   comms.push_back(std::make_shared<Scatter>(std::move(params)));
 }
 
@@ -158,6 +160,7 @@ void lowerToGather(
     DeviceIdxType my_device_index,
     const DeviceMesh& sender_mesh,
     const DeviceMesh& receiver_mesh,
+    int input_sharded_dim,
     at::Tensor input_tensor,
     at::Tensor output_tensor,
     std::vector<std::shared_ptr<Communication>>& comms) {
@@ -167,7 +170,7 @@ void lowerToGather(
       continue;
     }
     auto params = createParamsForGatherScatter(
-        my_device_index, root, sender_mesh, output_tensor, input_tensor, false);
+        my_device_index, root, sender_mesh, input_sharded_dim, output_tensor, input_tensor, false);
     comms.push_back(std::make_shared<Gather>(std::move(params)));
   }
 }
@@ -176,6 +179,7 @@ void lowerToGather(
 void lowerToAllgather(
     DeviceIdxType my_device_index,
     const DeviceMesh& mesh,
+    int input_sharded_dim,
     at::Tensor input_tensor,
     at::Tensor output_tensor,
     std::vector<std::shared_ptr<Communication>>& comms) {
@@ -183,13 +187,23 @@ void lowerToAllgather(
     return;
   }
 
+  std::vector<int64_t> slice_shape = {1}; // Device dim axis length = 1
+  for (auto i = 1; i < output_tensor.dim(); i++) {
+    slice_shape.push_back(output_tensor.size(i));
+  }
+
   CommParams params;
   params.team = mesh.vector();
   for (auto i : c10::irange(mesh.vector().size())) {
+    // allgather writes to output tensor with the device sharded axes pushed
+    // to the outermost axes for contiguity. 
+    // See csrc/multidevice/executor.cpp handle(PipelineCommunication)
+    std::vector<at::indexing::TensorIndex> indices(output_tensor.dim(), at::indexing::Slice());
+    indices[0] = at::indexing::Slice(i, i+1);
     params.dst_bufs.push_back(
-        output_tensor.index({static_cast<int>(i), "..."}).view(input_tensor.sizes()));
+      output_tensor.index(indices).view(at::IntArrayRef(slice_shape)));
   }
-  params.src_bufs = {input_tensor};
+  params.src_bufs = {input_tensor.view(slice_shape)};
 
   comms.push_back(std::make_shared<Allgather>(std::move(params)));
 }
@@ -425,6 +439,9 @@ std::vector<std::shared_ptr<Communication>> lowerCommunication(
   const bool is_output_sharded =
       isSharded(output_tv) && receiver_mesh.vector().size() > 1;
 
+  int input_sharded_dim = dimWithParallelType(input_tv, ParallelType::DIDx);
+  int output_sharded_dim = dimWithParallelType(output_tv, ParallelType::DIDx);
+
   auto original_expr = output_tv->definition();
   NVF_ERROR(isLowerableToCommunication(original_expr), "Lowering expression ",
     original_expr," to communication is not supported");
@@ -487,18 +504,20 @@ std::vector<std::shared_ptr<Communication>> lowerCommunication(
           my_device_index,
           sender_mesh,
           receiver_mesh,
+          output_sharded_dim,
           input_tensor,
           output_tensor,
           comms);
     } else if (is_input_sharded && !is_output_sharded) {
       if (receiver_mesh == sender_mesh) {
         lowerToAllgather(
-            my_device_index, sender_mesh, input_tensor, output_tensor, comms);
+            my_device_index, sender_mesh, input_sharded_dim, input_tensor, output_tensor, comms);
       } else {
         lowerToGather(
             my_device_index,
             sender_mesh,
             receiver_mesh,
+            input_sharded_dim,
             input_tensor,
             output_tensor,
             comms);

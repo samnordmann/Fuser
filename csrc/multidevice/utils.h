@@ -16,4 +16,7 @@ namespace nvfuser {
 // Checks that the other non-reduction axis are not parallelized on Didx
 bool isSharded(TensorView*);
 
+// Returns the axis that is parallelized with type
+int dimWithParallelType(TensorView*, ParallelType);
+
 } // namespace nvfuser
