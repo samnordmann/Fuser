@@ -8411,6 +8411,35 @@ TEST_F(NVFuserTest, Reduction3DWithBroadcast) {
       unsched_fusion_ptr.get(), cg_outputs, inputs, __LINE__, __FILE__);
 }
 
+TEST_F(NVFuserTest, compileHang) {
+
+
+  const std::vector<int64_t> input_sizes = {16, 32, 3, 5};
+
+  auto fusion = std::make_unique<Fusion>();
+  FusionGuard fg(fusion.get());
+  TensorView* tv0 = makeConcreteTensor(input_sizes);
+  TensorView* tv1 = sum(tv0, {3});
+  TensorView* tv2 = set(tv1);
+  TensorView* tv3 = sum(tv2, {1});
+  fusion->addInput(tv0);
+  fusion->addOutput(tv3);
+
+  at::Tensor input = at::ones(input_sizes,  at::TensorOptions().dtype(at::kFloat).device(at::kCUDA, 0));
+
+  std::cout << "compiling:" << std::endl;
+  FusionExecutor fe;
+  fe.compileFusion(fusion.get(), {input});
+
+  std::cout << "running:" << std::endl;
+  auto outputs = fe.runFusion({input});
+
+  for (auto i: c10::irange(outputs.size())) {
+    std::cout << "output " << i <<":\n" << outputs.at(i) << std::endl;
+  }
+
+}
+
 // Test file size should be up to 10K LoC. Create a new file for more tests.
 
 } // namespace nvfuser
