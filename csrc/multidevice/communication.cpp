@@ -217,7 +217,6 @@ c10::intrusive_ptr<c10d::Work> Scatter::post(
 Reduce::Reduce(CommParams params) : Communication(params, "reduce") {
   assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
   assertBufferCount(params_.src_bufs, 1);
-  NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
 }
 
 c10::intrusive_ptr<c10d::Work> Reduce::post(
@@ -235,8 +234,7 @@ c10::intrusive_ptr<c10d::Work> Reduce::post(
       .reduceOp = params_.redOp, .rootRank = root_relative_index_};
   auto team_backend = comm.getBackendForTeam(params_.team, backend);
 #ifdef USE_C10D_NCCL
-  auto nccl_backend =
-      dynamic_cast<c10d::ProcessGroupNCCL*>(team_backend.get());
+  auto nccl_backend = dynamic_cast<c10d::ProcessGroupNCCL*>(team_backend.get());
   if (nccl_backend) {
     return nccl_backend->_reduce_oop(buf, params_.src_bufs, options);
   }
@@ -252,7 +250,6 @@ Allreduce::Allreduce(CommParams params)
   assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
   assertBufferCount(params_.src_bufs, 1);
   assertBufferCount(params_.dst_bufs, 1);
-  NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
 }
 
 c10::intrusive_ptr<c10d::Work> Allreduce::post(

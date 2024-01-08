@@ -370,6 +370,10 @@ class IterDomain : public Val {
   //! Applies 2D swizzle on a rectangular tile defined by
   //!  a pair of iterdomains.
   static std::pair<IterDomain*, IterDomain*> swizzle(
+      SwizzleType swizzle_type,
+      IterDomain* in_x,
+      IterDomain* in_y);
+  static std::pair<IterDomain*, IterDomain*> swizzle(
       Swizzle2DType swizzle_type,
       IterDomain* in_x,
       IterDomain* in_y,
@@ -566,10 +570,6 @@ class TensorDomain : public Val {
     return no_bcast_domain_;
   }
 
-  const std::vector<IterDomain*>& noDevices() const {
-    return no_device_domain_;
-  }
-
   // The input logical domain. The root domain of a consumer should equal the
   // rfactor domain of its producer ignoring reduction dimensions.
   const std::vector<IterDomain*>& root() const {
@@ -625,7 +625,6 @@ class TensorDomain : public Val {
   void resetDomains() {
     no_reduction_domain_ = noReductions(leaf_domain_);
     no_bcast_domain_ = noBroadcasts(leaf_domain_);
-    no_device_domain_ = noDevices(leaf_domain_);
     has_reduction_ = hasReduction(leaf_domain_);
   }
 
@@ -661,6 +660,7 @@ class TensorDomain : public Val {
 
   //! Applies 2D swizzle on a rectangular tile defined by
   //!  a pair of iterdomains contained in this domain.
+  void swizzle(SwizzleType swizzle_type, int x, int y);
   void swizzle(
       Swizzle2DType swizzle_type,
       int x,
@@ -678,11 +678,9 @@ class TensorDomain : public Val {
 
   static std::vector<IterDomain*> noReductions(const std::vector<IterDomain*>&);
   static std::vector<IterDomain*> noBroadcasts(const std::vector<IterDomain*>&);
-  static std::vector<IterDomain*> noDevices(const std::vector<IterDomain*>&);
 
   static bool hasBroadcast(const std::vector<IterDomain*>&);
   static bool hasReduction(const std::vector<IterDomain*>&);
-  static bool hasDevice(const std::vector<IterDomain*>&);
 
   // Get a vector whose size is the number of IDs in the given rfactor_domain
   // filled with fill_value or nullopt depending on whether its corresponding ID
@@ -702,7 +700,6 @@ class TensorDomain : public Val {
 
   std::vector<IterDomain*> no_bcast_domain_;
   std::vector<IterDomain*> no_reduction_domain_;
-  std::vector<IterDomain*> no_device_domain_;
   std::vector<std::optional<bool>> contiguity_;
   bool has_reduction_;
 };

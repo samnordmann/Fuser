@@ -6,61 +6,59 @@
  */
 // clang-format on
 #ifdef USE_DISTRIBUTED
-#include <limits>
 #include <ir/interface_nodes.h>
 #include <multidevice/device_mesh.h>
 #include <multidevice/lower_communication.h>
-#include <multidevice/pipeline.h>
-#include <ops/all_ops.h>
 #include <multidevice/utils.h>
+#include <ops/all_ops.h>
+#include <limits>
 
 namespace nvfuser {
 
 namespace {
 
-template<typename T>
+template <typename T>
 inline T getInitialValue(BinaryOpType op) {
   switch (op) {
-  case BinaryOpType::Add:
-    return 0;
-  case BinaryOpType::Mul:
-    return 1;
-  case BinaryOpType::Min:
-    return std::numeric_limits<T>::min();
-  case BinaryOpType::Max:
-    return std::numeric_limits<T>::max();
-  case BinaryOpType::BitwiseAnd:
-    return std::numeric_limits<T>::max();
-  case BinaryOpType::BitwiseOr:
-    return 0;
-  case BinaryOpType::BitwiseXor:
-    return 0;
-  default:
-    NVF_ERROR(false, "invalid binary op type");
-    return 0;
+    case BinaryOpType::Add:
+      return 0;
+    case BinaryOpType::Mul:
+      return 1;
+    case BinaryOpType::Min:
+      return std::numeric_limits<T>::min();
+    case BinaryOpType::Max:
+    case BinaryOpType::BitwiseAnd:
+      return std::numeric_limits<T>::max();
+    case BinaryOpType::BitwiseOr:
+    case BinaryOpType::BitwiseXor:
+      return 0;
+    default:
+      NVF_ERROR(false, "invalid binary op type");
+      return 0;
   }
 }
 
-// TODO: handle `c10d::RedOpType::reduceOp::AVG` and `c10d::RedOpType::reduceOp::PREMUL_SUM`
+// TODO: handle `c10d::RedOpType::reduceOp::AVG` and
+// `c10d::RedOpType::reduceOp::PREMUL_SUM`
 inline c10d::ReduceOp::RedOpType getC10dReduceOpType(BinaryOpType op) {
   switch (op) {
-  case BinaryOpType::Add:
-    return c10d::ReduceOp::RedOpType::SUM;
-  case BinaryOpType::Mul:
-    return c10d::ReduceOp::RedOpType::PRODUCT;
-  case BinaryOpType::Min:
-    return c10d::ReduceOp::RedOpType::MIN;
-  case BinaryOpType::Max:
-    return c10d::ReduceOp::RedOpType::MAX;
-  case BinaryOpType::BitwiseAnd:
-    return c10d::ReduceOp::RedOpType::BAND;
-  case BinaryOpType::BitwiseOr:
-    return c10d::ReduceOp::RedOpType::BOR;
-  case BinaryOpType::BitwiseXor:
-    return c10d::ReduceOp::RedOpType::BXOR;
-  default:
-    NVF_ERROR(false, "unsupported reduction operation");
-    return c10d::ReduceOp::RedOpType::UNUSED;
+    case BinaryOpType::Add:
+      return c10d::ReduceOp::RedOpType::SUM;
+    case BinaryOpType::Mul:
+      return c10d::ReduceOp::RedOpType::PRODUCT;
+    case BinaryOpType::Min:
+      return c10d::ReduceOp::RedOpType::MIN;
+    case BinaryOpType::Max:
+      return c10d::ReduceOp::RedOpType::MAX;
+    case BinaryOpType::BitwiseAnd:
+      return c10d::ReduceOp::RedOpType::BAND;
+    case BinaryOpType::BitwiseOr:
+      return c10d::ReduceOp::RedOpType::BOR;
+    case BinaryOpType::BitwiseXor:
+      return c10d::ReduceOp::RedOpType::BXOR;
+    default:
+      NVF_ERROR(false, "unsupported reduction operation");
+      return c10d::ReduceOp::RedOpType::UNUSED;
   }
 }
 
@@ -84,7 +82,9 @@ inline at::Tensor createDummyTensor(at::Tensor reference) {
   return at::empty_like(reference, reference.options());
 }
 
-inline at::Tensor createDummyTensor(at::Tensor reference, BinaryOpType op_type) {
+inline at::Tensor createDummyTensor(
+    at::Tensor reference,
+    BinaryOpType op_type) {
   return createDummyTensor(reference).fill_(getInitialValue<float>(op_type));
 }
 
@@ -105,7 +105,7 @@ CommParams createParamsForGatherScatter(
   params.team = mesh.vector();
   bool is_root_in_mesh = mesh.has(root);
   if (!is_root_in_mesh) {
-     params.team.push_back(root);
+    params.team.push_back(root);
   }
 
   if (mesh.has(my_device_index)) {
@@ -117,13 +117,17 @@ CommParams createParamsForGatherScatter(
       std::vector<at::indexing::TensorIndex> indices(root_buf.dim(), at::indexing::Slice());
       indices[sharded_dim] = at::indexing::Slice(i, i+1);
       ((is_scatter)? params.src_bufs : params.dst_bufs).push_back(root_buf.index(indices).contiguous());
+      // auto sliced_buf =
+      //     root_buf.index({static_cast<int>(i), "..."}).unsqueeze(0);
+      // ((is_scatter) ? params.src_bufs : params.dst_bufs).push_back(sliced_buf);
     }
     // The scatter/gather semantics imposes the root to be both
     // sender and receiver. If the root is not in the mesh, we thus
     // have to artificially make it send and receive a dummy buffer
     // Since it is an "inplace" operation, this should not cause any overhead
     if (!is_root_in_mesh) {
-      at::Tensor dummy = createDummyTensor(buf);
+      at::Tensor dummy =
+          createDummyTensor(root_buf.index({0, "..."}).unsqueeze(0));
       params.src_bufs.push_back(dummy);
       params.dst_bufs.push_back(dummy);
     }
@@ -202,6 +206,8 @@ void lowerToAllgather(
     indices[0] = at::indexing::Slice(i, i+1);
     params.dst_bufs.push_back(
       output_tensor.index(indices).view(at::IntArrayRef(slice_shape)));
+    // params.dst_bufs.push_back(output_tensor.index({static_cast<int>(i), "..."})
+    //                               .view(input_tensor.sizes()));
   }
   params.src_bufs = {input_tensor.view(slice_shape)};
 
@@ -275,10 +281,10 @@ void lowerToBroadcastOrP2P(
           "the receiver and sender meshes have different sizes");
       at::Tensor input, output;
       if (input_tensor.numel()) {
-        input = input_tensor.index({0, "..."});
+        input = input_tensor.index({static_cast<int>(0), "..."});
       }
       if (output_tensor.numel()) {
-        output = output_tensor.index({0, "..."});
+        output = output_tensor.index({static_cast<int>(0), "..."});
       }
       lowerToBroadcastOrP2P(
           my_device_index,
@@ -307,23 +313,21 @@ CommParams createParamsForReduce(
     at::Tensor input_tensor,
     at::Tensor output_tensor,
     BinaryOpType op_type) {
-
   CommParams params;
   params.root = root;
   params.redOp = getC10dReduceOpType(op_type);
   params.team = mesh.vector();
   bool is_root_in_mesh = mesh.has(root);
   if (!is_root_in_mesh) {
-     params.team.push_back(root);
+    params.team.push_back(root);
   }
 
   if (mesh.has(my_device_index)) {
-    auto sliced_buf = input_tensor.index({0, "..."});
-    params.src_bufs = {sliced_buf};
+    params.src_bufs = {input_tensor.squeeze(0)};
   }
 
   if (my_device_index == root) {
-      params.dst_bufs = {output_tensor};
+    params.dst_bufs = {output_tensor};
     // The reduce semantics imposes the root to be both
     // sender and receiver. If the root is not in the mesh, we thus
     // have to artificially make it send and receive a dummy buffer
@@ -349,12 +353,12 @@ void lowerToReduce(
       continue;
     }
     auto params = createParamsForReduce(
-                    my_device_index,
-                    root,
-                    sender_mesh,
-                    input_tensor,
-                    output_tensor,
-                    op_type);
+        my_device_index,
+        root,
+        sender_mesh,
+        input_tensor,
+        output_tensor,
+        op_type);
     comms.push_back(std::make_shared<Reduce>(std::move(params)));
   }
 }
@@ -373,8 +377,7 @@ void lowerToAllreduce(
   params.redOp = getC10dReduceOpType(op_type);
   params.team = mesh.vector();
   params.dst_bufs = {output_tensor};
-  auto sliced_buf = input_tensor.index({0, "..."});
-  params.src_bufs = {sliced_buf};
+  params.src_bufs = {input_tensor.view(output_tensor.sizes())};
 
   comms.push_back(std::make_shared<Allreduce>(params));
 }
@@ -392,9 +395,10 @@ void lowerToReduceScatter(
   CommParams params;
   params.redOp = getC10dReduceOpType(op_type);
   params.team = mesh.vector();
-  params.dst_bufs = {output_tensor.index({0, "..."})};
-  for (int i: params.team) {
-    auto sliced_buf = input_tensor.index({0, i, "..."});
+  params.dst_bufs = {output_tensor};
+  for (auto i : c10::irange(mesh.vector().size())) {
+    auto sliced_buf = input_tensor.index({0, static_cast<int>(i), "..."})
+                          .view(output_tensor.sizes());
     params.src_bufs.push_back(sliced_buf);
   }
 
@@ -402,7 +406,6 @@ void lowerToReduceScatter(
 }
 
 } // namespace
-
 
 /*
 TODO:
@@ -415,23 +418,20 @@ TODO:
 */
 std::vector<std::shared_ptr<Communication>> lowerCommunication(
     DeviceIdxType my_device_index,
-    PipelineCommunication* c,
+    Expr* c,
     at::Tensor input_tensor,
     at::Tensor output_tensor) {
   std::vector<std::shared_ptr<Communication>> comms;
-  NVF_ERROR(c->in()->as<PipelineVal>()->getOriginalVal()->isA<TensorView>()
-    && c->out()->as<PipelineVal>()->getOriginalVal()->isA<TensorView>(),
-    "I/O must be TensorViews");
-  TensorView* input_tv =
-      c->in()->as<PipelineVal>()->getOriginalVal()->as<TensorView>();
-  TensorView* output_tv =
-      c->out()->as<PipelineVal>()->getOriginalVal()->as<TensorView>();
+  NVF_ERROR(
+      c->inputs().size() == 1 && c->inputs().at(0)->isA<TensorView>() &&
+          c->outputs().size() == 1 && c->outputs().at(0)->isA<TensorView>(),
+      "I/O must be TensorViews");
+  TensorView* input_tv = c->inputs().at(0)->as<TensorView>();
+  TensorView* output_tv = c->outputs().at(0)->as<TensorView>();
   at::Tensor dummy;
 
-  const auto& sender_mesh =
-      c->in()->as<PipelineVal>()->getStage()->descriptor()->mesh;
-  const auto& receiver_mesh =
-      c->out()->as<PipelineVal>()->getStage()->descriptor()->mesh;
+  const auto& sender_mesh = input_tv->getDeviceMesh();
+  const auto& receiver_mesh = output_tv->getDeviceMesh();
 
   // Stores whether the I/O has its first axis parallelized on Didx
   const bool is_input_sharded =
@@ -443,59 +443,61 @@ std::vector<std::shared_ptr<Communication>> lowerCommunication(
   int output_sharded_dim = dimWithParallelType(output_tv, ParallelType::DIDx);
 
   auto original_expr = output_tv->definition();
-  NVF_ERROR(isLowerableToCommunication(original_expr), "Lowering expression ",
-    original_expr," to communication is not supported");
+  NVF_ERROR(
+      isLowerableToCommunication(original_expr),
+      "Lowering expression ",
+      original_expr->toString(),
+      " to communication is not supported");
   bool is_reduction = original_expr->isA<ReductionOp>();
 
-  // TODO: FIX
+  // TODO: Check valid sharding.
   // NVF_ERROR(
-  //     !is_input_sharded ||
-  //     !input_tensor.numel() ||
-  //         sender_mesh.vector().size() ==
-  //             static_cast<size_t>(input_tensor.size(0)),
-  //     "the size of the mesh ",
-  //     sender_mesh.vector().size(),
-  //     " doesn't match the size of the tensor ",
+  //     !is_input_sharded || !input_tensor.numel() ||
+  //         static_cast<size_t>(input_tensor.size(0)) == 1,
+  //     "Sharded dimension should have allocation size 1, but is ",
   //     input_tensor.size(0));
   // NVF_ERROR(
-  //     !is_output_sharded ||
-  //     !output_tensor.numel() ||
-  //     is_reduction ||
-  //         receiver_mesh.vector().size() ==
-  //             static_cast<size_t>(output_tensor.size(0)),
-  //     "the size of the mesh",
-  //     receiver_mesh.vector().size(),
-  //     " doesn't match the size of the tensor ",
+  //     !is_output_sharded || !output_tensor.numel() || is_reduction ||
+  //         static_cast<size_t>(output_tensor.size(0)) == 1,
+  //     "Sharded dimension should have allocation size 1, but is ",
   //     output_tensor.size(0));
   if (is_reduction) {
-    BinaryOpType op_type = output_tv->definition()->as<ReductionOp>()->getReductionOpType();
-    NVF_ERROR(is_input_sharded, "the comm input must be sharded in case of reduce.",
-                                "Insert a `set` before the reduction to reshard")
+    BinaryOpType op_type =
+        output_tv->definition()->as<ReductionOp>()->getReductionOpType();
+    NVF_ERROR(
+        is_input_sharded || sender_mesh.vector().size() == 1,
+        "the comm input must be sharded in case of reduce.",
+        "Insert a `set` before the reduction to reshard")
     if (is_output_sharded) {
-      if (receiver_mesh == sender_mesh) {
-        lowerToReduceScatter(my_device_index,
-                      sender_mesh,
-                      input_tensor,
-                      output_tensor,
-                      op_type,
-                      comms);
-      }
+      NVF_ERROR(
+          receiver_mesh == sender_mesh,
+          "ReduceScatter operation must have the same sender and receiver device mesh. "
+          "Insert a Set operation before or after the reduction to reshard ot another device mesh");
+      lowerToReduceScatter(
+          my_device_index,
+          sender_mesh,
+          input_tensor,
+          output_tensor,
+          op_type,
+          comms);
     } else {
       if (receiver_mesh == sender_mesh) {
-        lowerToAllreduce(my_device_index,
-                      sender_mesh,
-                      input_tensor,
-                      output_tensor,
-                      op_type,
-                      comms);
+        lowerToAllreduce(
+            my_device_index,
+            sender_mesh,
+            input_tensor,
+            output_tensor,
+            op_type,
+            comms);
       } else {
-        lowerToReduce(my_device_index,
-                      sender_mesh,
-                      receiver_mesh,
-                      input_tensor,
-                      output_tensor,
-                      op_type,
-                      comms);
+        lowerToReduce(
+            my_device_index,
+            sender_mesh,
+            receiver_mesh,
+            input_tensor,
+            output_tensor,
+            op_type,
+            comms);
       }
     }
   } else {
@@ -541,12 +543,15 @@ bool isLowerableToCommunication(Expr* expr) {
     auto out = expr->as<ReductionOp>()->out();
     NVF_ERROR(out->isA<TensorView>(), "output is not a TensorView");
     auto out_tv = out->as<TensorView>();
-    NVF_ERROR(out_tv->domain()->nDims() == TensorDomain::noReductions(out_tv->getMaybeRFactorDomain()).size() + 1,
-      "only reducing one-axis at a time is supported");
+    NVF_ERROR(
+        out_tv->domain()->nDims() ==
+            TensorDomain::noReductions(out_tv->getMaybeRFactorDomain()).size() +
+                1,
+        "only reducing one-axis at a time is supported");
     return true;
   }
-  return expr->isA<LoadStoreOp>()
-                && (expr->as<LoadStoreOp>()->opType() == LoadStoreOpType::Set);
+  return expr->isA<LoadStoreOp>() &&
+      (expr->as<LoadStoreOp>()->opType() == LoadStoreOpType::Set);
 }
 
 } // namespace nvfuser

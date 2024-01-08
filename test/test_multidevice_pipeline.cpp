@@ -92,42 +92,34 @@ TEST_F(PipelineTest, Pipeline) {
   TensorView* tv13 = sum(tv12, {0});
   fusion->addOutput(tv13);
 
-  // ===========================================================
-  //        PIPELINE SCHEDULING
-  // ===========================================================
-  /* Each TensorView must be assigned to one and only one stage
-     WAR: if an intermediate TensorView is automatically added
-          in the Fusion during Fusion definition,
-          it also needs to be assigned manually to a stage */
-  PipelineStageDescriptor stage0_, stage1_, stage0, stage1, stage2, stage3,
-      stage4;
-  stage0_.addVal({tv0_, tv1_});
-  stage1_.addVal({tv2_, tv3_});
-  stage0.addVal({tv0, tv1});
-  stage1.addVal({tv2, tv2a, tv3});
-  stage2.addVal({tv4, tv4a, tv5});
-  stage3.addVal({tv6, tv7});
-  stage4.addVal({tv8, tv9, tv10, tv11, tv12, tv13});
+  DeviceMesh mesh0_({5});
+  DeviceMesh mesh1_({2, 4});
+  DeviceMesh mesh0({0});
+  DeviceMesh mesh1({0, 1, 4});
+  DeviceMesh mesh2({1, 3});
+  DeviceMesh mesh3({2});
+  DeviceMesh mesh4({4, 5});
 
-  // binding each stage to a device mesh
-  stage0_.mesh = {5};
-  stage1_.mesh = {2, 4};
-  stage0.mesh = {0};
-  stage1.mesh = {0, 1, 4};
-  stage2.mesh = {1, 3};
-  stage3.mesh = {2};
-  stage4.mesh = {4, 5};
-
-  PipelineDescriptor descriptor{.stage_descriptors{
-      std::move(stage0_),
-      std::move(stage1_),
-      std::move(stage0),
-      std::move(stage1),
-      std::move(stage2),
-      std::move(stage3),
-      std::move(stage4)}}; // the order doesn't matter
-
-  pipeline = std::make_unique<Pipeline>(fusion.get(), std::move(descriptor));
+  tv0_->setDeviceMesh(mesh0_);
+  tv1_->setDeviceMesh(mesh0_);
+  tv2_->setDeviceMesh(mesh1_);
+  tv3_->setDeviceMesh(mesh1_);
+  tv0->setDeviceMesh(mesh0);
+  tv1->setDeviceMesh(mesh0);
+  tv2->setDeviceMesh(mesh1);
+  tv2a->setDeviceMesh(mesh1);
+  tv3->setDeviceMesh(mesh1);
+  tv4->setDeviceMesh(mesh2);
+  tv4a->setDeviceMesh(mesh2);
+  tv5->setDeviceMesh(mesh2);
+  tv6->setDeviceMesh(mesh3);
+  tv7->setDeviceMesh(mesh3);
+  tv8->setDeviceMesh(mesh4);
+  tv9->setDeviceMesh(mesh4);
+  tv10->setDeviceMesh(mesh4);
+  tv11->setDeviceMesh(mesh4);
+  tv12->setDeviceMesh(mesh4);
+  tv13->setDeviceMesh(mesh4);
 
   // Create input tensors.
   // Note: each process is binded to a different GPU
@@ -136,23 +128,94 @@ TEST_F(PipelineTest, Pipeline) {
       at::randn(input_shape1, tensor_options),
       at::randn(input_shape2, tensor_options)};
 
-  validate();
+  executeAndValidate();
+}
+
+//(backend type, first stage's mesh, second stage's mesh (if not null), is first
+//stage sharded?, is second
+// stage sharded?, do_reduction?)
+using PipelineTestTwoStagesParams =
+    std::tuple<CommunicatorBackend, DeviceMesh, DeviceMesh, bool, bool, bool>;
+class PipelineTestTwoStages
+    : public PipelineTest,
+      public ::testing::WithParamInterface<PipelineTestTwoStagesParams> {};
+
+TEST_P(PipelineTestTwoStages, Communication) {
+  auto
+      [backend,
+       mesh0,
+       mesh1,
+       is_stage0_sharded,
+       is_stage1_sharded,
+       do_reduction] = GetParam();
+  if (!communicator->isBackendAvailable(backend)) {
+    GTEST_SKIP() << "Backend not available";
+  }
+  communicator->setDefaultBackend(backend);
+
+  if (mesh1.vector().empty()) {
+    mesh1 = mesh0;
+  }
+
+  int first_axis_extent = 3;
+  if (is_stage0_sharded) {
+    first_axis_extent = mesh0.vector().size();
+  } else if (is_stage1_sharded) {
+    first_axis_extent = mesh1.vector().size();
+  }
+  int second_axis_extent = 2;
+  if (is_stage1_sharded && do_reduction) {
+    GTEST_ASSERT_EQ(mesh0.vector().size(), mesh1.vector().size());
+    second_axis_extent = mesh1.vector().size();
+  }
+  std::vector<int64_t> input_sizes = {
+      first_axis_extent, second_axis_extent, 3, 5};
+
+  FusionGuard fg(fusion.get());
+  TensorView* tv0 = makeConcreteTensor(input_sizes);
+  TensorView* tv1 = sum(tv0, {3});
+  TensorView* tv2 = do_reduction ? sum(tv1, {0}) : set(tv1);
+  TensorView* tv3 = sum(tv2, {1});
+  fusion->addInput(tv0);
+  fusion->addOutput(tv3);
+
+  tv0->setDeviceMesh(mesh0);
+  tv1->setDeviceMesh(mesh0);
+  tv2->setDeviceMesh(mesh1);
+  tv3->setDeviceMesh(mesh1);
+  if (is_stage0_sharded) {
+    tv0->axis(0)->parallelize(ParallelType::DIDx);
+    tv1->axis(0)->parallelize(ParallelType::DIDx);
+    // Shard outermost-axis of input
+    input_sizes[0] = 1;
+  }
+  if (is_stage1_sharded) {
+    // in case of reduction, axis(0) of tv2 is a reduction axis, except if it
+    // was initially of size 1, in which case it is simply removed.
+    int tv2_outmost_axis = (do_reduction && second_axis_extent > 1) ? 1 : 0;
+    tv2->axis(tv2_outmost_axis)->parallelize(ParallelType::DIDx);
+    tv3->axis(0)->parallelize(ParallelType::DIDx);
+  }
+
+  inputs = {at::ones(input_sizes, tensor_options) * communicator->deviceId()};
+
+  executeAndValidate();
 }
 
 namespace {
 auto all_backends =
     ::testing::Values(CommunicatorBackend::nccl, CommunicatorBackend::ucc);
 
+DeviceMesh mesh_null;
 DeviceMesh mesh0({0});
 DeviceMesh mesh1({1});
 DeviceMesh mesh2({0, 1, 2, 3});
 DeviceMesh mesh3({0, 2, 3});
 DeviceMesh mesh4({1, 0, 2});
 auto all_meshes = ::testing::Values(mesh0, mesh1, mesh2, mesh3, mesh4);
+auto all_nontrivial_meshes = ::testing::Values(mesh2, mesh3, mesh4);
 
 } // namespace
-
-TEST_P(PipelineTestTwoStages, Communication) {}
 
 INSTANTIATE_TEST_SUITE_P(
     Gather,
@@ -162,6 +225,7 @@ INSTANTIATE_TEST_SUITE_P(
         all_meshes,
         all_meshes,
         ::testing::Values(true),
+        ::testing::Values(false),
         ::testing::Values(false)));
 
 INSTANTIATE_TEST_SUITE_P(
@@ -172,7 +236,8 @@ INSTANTIATE_TEST_SUITE_P(
         all_meshes,
         all_meshes,
         ::testing::Values(false),
-        ::testing::Values(true)));
+        ::testing::Values(true),
+        ::testing::Values(false)));
 
 INSTANTIATE_TEST_SUITE_P(
     Bcast,
@@ -182,6 +247,7 @@ INSTANTIATE_TEST_SUITE_P(
         all_meshes,
         all_meshes,
         ::testing::Values(false),
+        ::testing::Values(false),
         ::testing::Values(false)));
 
 INSTANTIATE_TEST_SUITE_P(
@@ -189,150 +255,55 @@ INSTANTIATE_TEST_SUITE_P(
     PipelineTestTwoStages,
     ::testing::Combine(
         all_backends,
-        ::testing::Values(mesh3),
-        ::testing::Values(mesh4),
+        ::testing::Values(mesh3, mesh4),
+        ::testing::Values(mesh3, mesh4),
+        ::testing::Values(true),
+        ::testing::Values(true),
+        ::testing::Values(false)));
+
+INSTANTIATE_TEST_SUITE_P(
+    Bcast_sharded_same_mesh,
+    PipelineTestTwoStages,
+    ::testing::Combine(
+        all_backends,
+        ::testing::Values(mesh0, mesh1),
+        ::testing::Values(mesh_null), // the same mesh is used for all tensors
+        ::testing::Values(true),
+        ::testing::Values(true),
+        ::testing::Values(false)));
+
+INSTANTIATE_TEST_SUITE_P(
+    Reduce,
+    PipelineTestTwoStages,
+    ::testing::Combine(
+        all_backends,
+        all_nontrivial_meshes,
+        all_meshes,
+        ::testing::Values(true),
+        ::testing::Values(false),
+        ::testing::Values(true)));
+
+INSTANTIATE_TEST_SUITE_P(
+    ReduceScatter,
+    PipelineTestTwoStages,
+    ::testing::Combine(
+        all_backends,
+        all_nontrivial_meshes,
+        ::testing::Values(mesh_null), // the same mesh is used for all tensors
+        ::testing::Values(true),
         ::testing::Values(true),
         ::testing::Values(true)));
 
-
-TEST_F(PipelineTest, Pipeline_Reduce) {
-  const std::vector<int64_t> input_shape = {4, 3, 1, 2};
-
-  FusionGuard fg(fusion.get());
-
-  TensorView* tv0 = makeConcreteTensor(input_shape);
-  fusion->addInput(tv0);
-  TensorView* tv1 = sum(tv0, {1});
-  TensorView* tv2 = sum(tv1, {0});
-  TensorView* tv3 = sum(tv2, {0});
-  fusion->addOutput(tv3);
-
-  tv0->axis(0)->parallelize(ParallelType::DIDx);
-  tv1->axis(0)->parallelize(ParallelType::DIDx);
-
-  PipelineStageDescriptor stage0(false), stage1(false);
-  stage0.addVal({tv0, tv1});
-  stage1.addVal({tv2, tv3});
-
-  stage0.mesh = {0, 1, 2, 3};
-  stage1.mesh = {0, 1};
-
-  PipelineDescriptor descriptor{
-      .stage_descriptors{std::move(stage0), std::move(stage1)}};
-
-  pipeline = std::make_unique<Pipeline>(fusion.get(), std::move(descriptor));
-
-  inputs = {at::ones(input_shape, tensor_options) * (communicator->deviceId() + 1)};
-
-  validate();
-}
-
-TEST_F(PipelineTest, Pipeline_ReduceToExternalRoot) {
-  const std::vector<int64_t> input_shape = {2, 3, 1, 2};
-
-  FusionGuard fg(fusion.get());
-
-  TensorView* tv0 = makeConcreteTensor(input_shape);
-  fusion->addInput(tv0);
-  TensorView* tv1 = sum(tv0, {1});
-  TensorView* tv2 = sum(tv1, {0});
-  TensorView* tv3 = sum(tv2, {0});
-  fusion->addOutput(tv3);
-
-  tv0->axis(0)->parallelize(ParallelType::DIDx);
-  tv1->axis(0)->parallelize(ParallelType::DIDx);
-
-  PipelineStageDescriptor stage0(false), stage1(false);
-  stage0.addVal({tv0, tv1});
-  stage1.addVal({tv2, tv3});
-
-  stage0.mesh = {0, 1};
-  stage1.mesh = {2};
-
-  PipelineDescriptor descriptor{
-      .stage_descriptors{std::move(stage0), std::move(stage1)}};
-
-  pipeline = std::make_unique<Pipeline>(fusion.get(), std::move(descriptor));
-
-  inputs = {at::ones(input_shape, tensor_options) * (communicator->deviceId() + 1)};
-
-  validate();
-}
-
-TEST_F(PipelineTest, Pipeline_Allreduce) {
-  const std::vector<int64_t> input_shape = {4, 3, 1, 2};
-  FusionGuard fg(fusion.get());
-
-  TensorView* tv0 = makeConcreteTensor(input_shape);
-  fusion->addInput(tv0);
-  TensorView* tv1 = sum(tv0, {1});
-  TensorView* tv2 = sum(tv1, {0});
-  TensorView* tv3 = sum(tv2, {0});
-  fusion->addOutput(tv3);
-
-  tv0->axis(0)->parallelize(ParallelType::DIDx);
-  tv1->axis(0)->parallelize(ParallelType::DIDx);
-
-  PipelineStageDescriptor stage0(false), stage1(false);
-  stage0.addVal({tv0, tv1});
-  stage1.addVal({tv2, tv3});
-
-  stage0.mesh = {0, 1, 2, 3};
-  stage1.mesh = {0, 1, 2, 3};
-
-  PipelineDescriptor descriptor{
-      .stage_descriptors{std::move(stage0), std::move(stage1)}};
-
-  pipeline = std::make_unique<Pipeline>(fusion.get(), std::move(descriptor));
-
-  inputs = {at::ones(input_shape, tensor_options) * (communicator->deviceId() + 1)};
-
-  validate();
-}
-
-TEST_F(PipelineTest, Pipeline_ReduceScatter) {
-  const std::vector<int64_t> input_shape = {4, 4, 1, 2};
-
-  FusionGuard fg(fusion.get());
-
-  TensorView* tv0 = makeConcreteTensor(input_shape);
-  fusion->addInput(tv0);
-  TensorView* tv1 = sum(tv0, {3});
-  TensorView* tv2 = sum(tv1, {0});
-  TensorView* tv3 = sum(tv2, {1});
-  fusion->addOutput(tv3);
-
-  tv0->axis(0)->parallelize(ParallelType::DIDx);
-  tv1->axis(0)->parallelize(ParallelType::DIDx);
-  tv2->axis(1)->parallelize(ParallelType::DIDx); //axis(0) is the "reduce" axis from previous tensor
-  tv3->axis(0)->parallelize(ParallelType::DIDx);
-
-  PipelineStageDescriptor stage0(false), stage1(false);
-  stage0.addVal({tv0, tv1});
-  stage1.addVal({tv2, tv3});
-
-  stage0.mesh = {0, 1, 2, 3};
-  stage1.mesh = {0, 1, 2, 3};
-
-  PipelineDescriptor descriptor{
-      .stage_descriptors{std::move(stage0), std::move(stage1)}};
-
-  pipeline = std::make_unique<Pipeline>(fusion.get(), std::move(descriptor));
-
-  inputs = {at::ones(input_shape, tensor_options) * (communicator->deviceId() + 1)};
-
-  validate();
-}
-
-
 TEST_F(PipelineTest, Overlap) {
   // In this example we demonstrate how we can apply the optimization
-  // described in 
-  // Overlap Communication with Dependent Computation via Decomposition in Large Deep Learning Models (acm.org)
+  // described in
+  // Overlap Communication with Dependent Computation via Decomposition in Large
+  // Deep Learning Models (acm.org)
   // https://dl.acm.org/doi/pdf/10.1145/3567955.3567959
-  // We simplify the setting as much as possible by considering a multi-device Pipeline with
-  // a simple "Gather" followed by a dependent compute. The paper suggest to slice those
-  // two operation and to interleave them to achieve better overlap. Consider the following Pipeline:
+  // We simplify the setting as much as possible by considering a multi-device
+  // Pipeline with a simple "Gather" followed by a dependent compute. The paper
+  // suggest to slice those two operation and to interleave them to achieve
+  // better overlap. Consider the following Pipeline:
 
   // /* Stage 0 */
   // TensorView* tv0 = makeContigTensor(3);
@@ -357,12 +328,12 @@ TEST_F(PipelineTest, Overlap) {
   constexpr int64_t number_of_slices = 4;
   constexpr int64_t extent_of_axis2 = 1024;
   constexpr int64_t extent_of_slice = extent_of_axis2 / number_of_slices;
-  const std::vector<int64_t> input_extents = {number_of_devices, 7, extent_of_axis2, 3};
+  const std::vector<int64_t> input_extents = {
+      number_of_devices, 7, extent_of_axis2, 3};
   assert(!(extent_of_axis2 % number_of_slices)); // for simplicity
 
   FusionGuard fg(fusion.get());
 
-  PipelineStageDescriptor stage0(false), stage1(false);
   // containers used later for adding ranges of tvs directly to the stages
   std::unordered_set<Val*> from_stage0, from_stage1;
   std::vector<Val*> to_stage0, to_stage1;
@@ -376,10 +347,10 @@ TEST_F(PipelineTest, Overlap) {
 
   TensorView *tv1x, *tv2x, *tv3x;
   std::vector<TensorView*> tv3_slices;
-  std::vector<Slice> slices {3};
+  std::vector<Slice> slices{3};
   for (int i = 0; i < number_of_slices; i++) {
     slices.at(2).start = IrBuilder::create<Val>(i * extent_of_slice);
-    slices.at(2).stop = IrBuilder::create<Val>((i+1) * extent_of_slice);
+    slices.at(2).stop = IrBuilder::create<Val>((i + 1) * extent_of_slice);
     tv1x = slice(tv1, slices);
     tv1x->axis(0)->parallelize(ParallelType::DIDx);
     to_stage0.push_back(tv1x);
@@ -393,23 +364,26 @@ TEST_F(PipelineTest, Overlap) {
   fusion->addOutput(tv3);
   to_stage1.push_back(tv3);
 
-  //instead of using "slice/cat" it would be nicer to split the dimension and use "select/stack", but "stack" is not implemented in nvFuser at the moment
+  // instead of using "slice/cat" it would be nicer to split the dimension and
+  // use "select/stack", but "stack" is not implemented in nvFuser at the moment
 
-  stage0.addRange(from_stage0, to_stage0);
-  stage1.addRange(from_stage1, to_stage1);
-  std::vector<DeviceIdxType> devices(number_of_devices);
-  std::iota(devices.begin(), devices.end(), 0);
-  stage0.mesh = devices;
-  stage1.mesh = {0};
+  // stage0.addRange(from_stage0, to_stage0);
+  // stage1.addRange(from_stage1, to_stage1);
+  // std::vector<DeviceIdxType> devices(number_of_devices);
+  // std::iota(devices.begin(), devices.end(), 0);
+  // stage0.mesh = devices;
+  // stage1.mesh = {0};
 
-  PipelineDescriptor descriptor {
-      .stage_descriptors{std::move(stage0), std::move(stage1)}};
+  // PipelineDescriptor descriptor {
+  //     .stage_descriptors{std::move(stage0), std::move(stage1)}};
 
-  pipeline = std::make_unique<Pipeline>(fusion.get(), std::move(descriptor));
+  // pipeline = std::make_unique<Pipeline>(std::move(fusion),
+  // std::move(descriptor));
 
-  inputs = {at::ones(input_extents, tensor_options) * (communicator->deviceId() + 1)};
+  // inputs = {at::ones(input_extents, tensor_options) *
+  // (communicator->deviceId() + 1)};
 
-  validate();
+  // executeAndValidate();
 }
 
 TensorView* MatrixMultiplication(TensorView* a, TensorView* b) {
@@ -440,8 +414,8 @@ TEST_F(PipelineTest, matmul_summa) {
   //   3 4 5 ]
   constexpr int64_t N = 2;
   constexpr int64_t M = 3;
-  DeviceMesh mesh ({0,1,2,3,4,5});
-  mesh.reshape({N,M});
+  DeviceMesh mesh({0, 1, 2, 3, 4, 5});
+  mesh.reshape({N, M});
 
   auto fusion = std::make_unique<Fusion>();
   auto fg = std::make_unique<FusionGuard>(fusion.get());
@@ -454,8 +428,8 @@ TEST_F(PipelineTest, matmul_summa) {
   a->split(2, M, false);
   b->split(0, N, false);
   b->split(2, M, false);
-  a->setDeviceMesh(&mesh);
-  b->setDeviceMesh(&mesh);
+  a->setDeviceMesh(mesh);
+  b->setDeviceMesh(mesh);
   a->axis(0)->parallelize(ParallelType::DIDx);
   a->axis(2)->parallelize(ParallelType::DIDy);
   b->axis(0)->parallelize(ParallelType::DIDx);
@@ -469,8 +443,8 @@ TEST_F(PipelineTest, matmul_summa) {
   auto b2 = set(b);
   a2->split(0, N, false);
   b2->split(1, M, false);
-  a2->setDeviceMesh(&mesh);
-  b2->setDeviceMesh(&mesh);
+  a2->setDeviceMesh(mesh);
+  b2->setDeviceMesh(mesh);
   a2->axis(0)->parallelize(ParallelType::DIDx);
   b2->axis(1)->parallelize(ParallelType::DIDy);
 
@@ -480,40 +454,39 @@ TEST_F(PipelineTest, matmul_summa) {
   auto b3 = broadcast(b2, {true, true, false, false});
   a3->split(0, N, false);
   b3->split(3, M, false);
-  a3->setDeviceMesh(&mesh);
-  b3->setDeviceMesh(&mesh);
+  a3->setDeviceMesh(mesh);
+  b3->setDeviceMesh(mesh);
   a3->axis(0)->parallelize(ParallelType::DIDx);
   b3->axis(3)->parallelize(ParallelType::DIDy);
 
   // c {DIDx{N}, x/N, y, DIDy{M}, z/M}
   auto c = mul(a3, b3);
-  c->setDeviceMesh(&mesh);
+  c->setDeviceMesh(mesh);
   c->axis(0)->parallelize(ParallelType::DIDx);
   c->axis(3)->parallelize(ParallelType::DIDy);
 
   // d {DIDx{N}, x/N, r{y}, DIDy{M}, z/M}
   auto d = sum(c, {2});
-  d->setDeviceMesh(&mesh);
+  d->setDeviceMesh(mesh);
   d->axis(0)->parallelize(ParallelType::DIDx);
   d->axis(3)->parallelize(ParallelType::DIDy);
   fusion->addOutput(d);
 
   fusion->print();
 
-  inputs = {at::randn(a_extents, tensor_options), at::randn(b_extents, tensor_options)};
+  inputs = {
+      at::randn(a_extents, tensor_options),
+      at::randn(b_extents, tensor_options)};
 
   FusionExecutor fe;
   fe.compileFusion(fusion.get(), inputs);
   auto ref_outputs = fe.runFusion(inputs);
 
-  std::cout
-  << "a (concrete inputs): \n" << inputs.at(0)
-  << "\nb (concrete inputs): \n" << inputs.at(1)
-  << std::endl;
-  for (auto t: c10::irange(ref_outputs.size())) {
-    std::cout
-    << "\noutput " << t <<":\n"
-    << ref_outputs.at(t);
+  std::cout << "a (concrete inputs): \n"
+            << inputs.at(0) << "\nb (concrete inputs): \n"
+            << inputs.at(1) << std::endl;
+  for (auto t : c10::irange(ref_outputs.size())) {
+    std::cout << "\noutput " << t << ":\n" << ref_outputs.at(t);
   }
   std::cout << std::endl;
 }

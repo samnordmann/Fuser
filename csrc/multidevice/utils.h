@@ -19,4 +19,11 @@ bool isSharded(TensorView*);
 // Returns the axis that is parallelized with type
 int dimWithParallelType(TensorView*, ParallelType);
 
+// returns the number of device indices present accross all
+// device meshes in the Fusion
+int64_t requestedNumberOfDevices(Fusion*);
+
+void unshard(Fusion*);
+void unshard(TensorView*);
+
 } // namespace nvfuser
