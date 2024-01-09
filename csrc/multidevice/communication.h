@@ -10,6 +10,7 @@
 
 #include <multidevice/communicator.h>
 #include <multidevice/multidevice.h>
+#include <ir/interface_nodes.h>
 #include <torch/csrc/distributed/c10d/Types.hpp>
 #include <type.h>
 
@@ -68,17 +69,30 @@ class Communication {
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) = 0;
 
+  virtual bool requiresRelayoutOutputTensor(TensorView* input_tv, TensorView* output_tv);
+  virtual at::Tensor allocateOutputTensor(TensorView* tv, at::Tensor& tensor);
+  virtual void relayoutOutputTensor();
+
  protected:
   // argument "name" is only used for printing
   // argument "has_root" indicates if the communication is rooted
   Communication(CommParams params, std::string name, bool has_root = true);
 
+  Communication(std::string name, bool has_root = true);
+
+  void setParams(CommParams params);
+
   // store the arguments of the communication
   CommParams params_;
   // stores the relative index of the root in the team
   DeviceIdxType root_relative_index_ = -1;
+  
+  std::vector<int64_t> output_permute_order_;
+  at::Tensor contig_output_tensor_;
+  at::Tensor output_;
 
  private:
+ void validateParams();
   // used for printing
   std::string collective_type_;
   // indicates if the communication is rooted
@@ -97,6 +111,8 @@ Requirements:
 class Broadcast : public Communication {
  public:
   Broadcast(CommParams params);
+  Broadcast(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
+            DeviceIdxType my_device_index, DeviceIdxType root);
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
@@ -115,6 +131,8 @@ Requirements:
 */
 class Gather : public Communication {
  public:
+  Gather(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
+          DeviceIdxType my_device_index, DeviceIdxType root);
   Gather(CommParams params);
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
@@ -132,6 +150,7 @@ Requirements:
 */
 class Allgather : public Communication {
  public:
+  Allgather(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output);
   Allgather(CommParams params);
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
@@ -151,6 +170,8 @@ Requirements:
 class Scatter : public Communication {
  public:
   Scatter(CommParams params);
+  Scatter(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
+          DeviceIdxType my_device_index, DeviceIdxType root);
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
@@ -168,6 +189,8 @@ Requirements:
 class Reduce : public Communication {
  public:
   Reduce(CommParams params);
+  Reduce(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
+          BinaryOpType op_type, DeviceIdxType my_device_index, DeviceIdxType root);
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
@@ -183,6 +206,8 @@ Requirements:
 class Allreduce : public Communication {
  public:
   Allreduce(CommParams params);
+  Allreduce(TensorView* input_tv, TensorView* output_tv,
+            at::Tensor input, at::Tensor output, BinaryOpType op_type);
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
@@ -197,6 +222,7 @@ Requirements:
 */
 class ReduceScatter : public Communication {
  public:
+  ReduceScatter(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, BinaryOpType op_type);
   ReduceScatter(CommParams params);
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
@@ -221,6 +247,8 @@ buffer
 class SendRecv : public Communication {
  public:
   SendRecv(CommParams params);
+  SendRecv(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
+  DeviceIdxType my_device_index, DeviceIdxType root, DeviceIdxType receiver);
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;

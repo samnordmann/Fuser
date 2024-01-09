@@ -201,52 +201,22 @@ void MultiDeviceExecutor::postCommunication(SegmentedGroup* group) {
     output_tensor = val_to_IValue_.at(output_val).toTensor();
   }
 
-  int input_sharded_dim = dimWithParallelType(static_cast<TensorView*>(input_val), ParallelType::DIDx);
-  int output_sharded_dim = dimWithParallelType(static_cast<TensorView*>(output_val), ParallelType::DIDx);
-  bool relayout = (input_sharded_dim > 0 && output_sharded_dim == -1);
-  auto output_ = output_tensor;
-  std::vector<int64_t> permute_order;
-  if (relayout) {
-    // input tensor was sharded like [a b .. DIDx ... c d] where DIDx is the axis parallelized on DIDx (input_sharded_dim)
-    // the output tensor elements will be ordered as [DIDx a b c d] with device dimensions pushed to the outer most axis
-    // TODO: for tensor sharded over multiple dimensions it will be [DIDz DIDy DIDx ...]
-    // TODO: should probably do this analysis on the tensorview's shape
-    auto shape = output_tensor.sizes();
-    std::vector<int64_t> written_shape;
-    written_shape.push_back(shape[input_sharded_dim]);
-    int permute_offset = 1;
-    for (int i = 0; i < output_tensor.dim(); i++) {
-      if (i == input_sharded_dim) {
-        permute_order.push_back(0);
-        permute_offset--;
-      } else {
-        written_shape.push_back(shape[i]);
-        permute_order.push_back(i + permute_offset);
-      }
-    }
-    output_ = at::randn(written_shape, output_tensor.options());
-  }
-
   // Lower the Communication into a vector of Communications
   if (communications_.find(group) == communications_.end()) { // check if cached
     communications_.emplace(
         group,
         lowerCommunication(
-            comm_.deviceId(), expr, input_tensor, output_));
+            comm_.deviceId(), expr, input_tensor, output_tensor));
   }
   auto& communications = communications_[group];
 
   // post and wait communications
   for (auto& communication : communications) {
     auto work = communication->post(comm_);
-    if (work)
+    if (work) {
       work->wait();
-  }
-
-  if (relayout) {
-    // Permute the axis into the correct order and copy into output_tensor.
-    auto goal = output_.permute(permute_order);
-    output_tensor.copy_(goal);
+      communication->relayoutOutputTensor();
+    }
   }
 }
 

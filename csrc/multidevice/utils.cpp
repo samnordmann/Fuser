@@ -49,6 +49,21 @@ int64_t requestedNumberOfDevices(Fusion* fusion) {
   return static_cast<int64_t>(device_indices.size());
 }
 
+bool isContiguousShard(TensorView* tv) {
+  // A shard is contiguous wrt the unsharded tensor if only the 
+  // outermost axis are device parallel. 
+  auto ids = TensorDomain::noReductions(tv->getLeafDomain());
+  bool outermost_sharded = ids[0]->isDeviceDim();
+  for (IterDomain* id : ids) {
+    auto id_sharded = id->isDeviceDim();
+    if (!outermost_sharded && id_sharded) {
+      return false;
+    }
+    outermost_sharded &= id_sharded;
+  }
+  return true;
+}
+
 void unshard(TensorView* tv) {
   for (IterDomain* id : tv->getLeafDomain()) {
     if (id->isDeviceDim()) {

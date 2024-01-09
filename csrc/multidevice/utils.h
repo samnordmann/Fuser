@@ -23,6 +23,10 @@ int dimWithParallelType(TensorView*, ParallelType);
 // device meshes in the Fusion
 int64_t requestedNumberOfDevices(Fusion*);
 
+// returns whether a device's sharded tensor is contiguous
+// with respect to its unsharded tensor
+bool isContiguousShard(TensorView*);
+
 void unshard(Fusion*);
 void unshard(TensorView*);
 
