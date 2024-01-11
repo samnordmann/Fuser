@@ -7,6 +7,7 @@
 // clang-format on
 #pragma once
 
+#include <disjoint_set.h>
 #include <exceptions.h>
 #include <ir/all_nodes.h>
 #include <type.h>
@@ -313,6 +314,10 @@ std::vector<TensorView*> outputTvsOf(std::vector<TensorView*> tvs);
 // returns all tensor views in fusion that are used between outputs and inputs.
 std::vector<TensorView*> allTvs(Fusion* fusion);
 
+// returns all tensor views used in the provided expressions
+VectorOfUniqueEntries<TensorView*> allTvsOfExprs(
+    const std::vector<Expr*>& exprs);
+
 // returns all tensor views in fusion that are used between outputs and inputs
 // except the specified set.
 std::vector<TensorView*> allTvsExcept(
@@ -530,6 +535,8 @@ std::vector<Expr*> getAllTypesOfReductionOps(Fusion* fusion);
 //! Returns true if fusion has any reduction ops.
 bool hasAnyReductionOps(Fusion* fusion);
 
+int64_t getVectorizeSize(const TensorView* tv);
+
 // Returns the permutation from `in` to `out`, i.e., `out[i]==in[perm[i]]`. If
 // `out` is not a permutation of `in`, returns nullopt.
 template <typename T>
@@ -551,5 +558,11 @@ std::optional<std::vector<int64_t>> computePermutation(
   }
   return permutation;
 }
+
+std::unordered_set<TensorView*> haveDifferentSharding(
+    TensorView* ref,
+    std::unordered_set<TensorView*> tvs);
+
+bool isResharding(Expr* expr);
 
 } // namespace nvfuser::ir_utils

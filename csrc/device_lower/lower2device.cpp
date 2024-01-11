@@ -33,6 +33,7 @@
 #include <device_lower/validation.h>
 #include <expr_simplifier.h>
 #include <fusion.h>
+#include <id_model/id_model.h>
 #include <instrumentation.h>
 #include <ir/iostream.h>
 #include <ir/utils.h>
@@ -249,7 +250,8 @@ void dumpExprsIfEnabled(
   if (force_enable || enabled_by_env()) {
     debug() << "After " << pass_name << ":" << std::endl;
     for (auto exp : exprs) {
-      debug() << exp->toString() << std::endl;
+      // `Expr::toString()` already ends with a new line.
+      debug() << exp->toString();
     }
   }
 }
@@ -261,7 +263,7 @@ GpuLower::GpuLower(Fusion* fusion, const CompileParams& cparams)
           // printed in verbose mode of lowering. The function must take a
           // const std::vector<Expr*>& and return a std::vector<Expr*>.
           {{"LoopNestGenerator", LoopNestGenerator::loweredExprs},
-           {"unarySetOpInserter", unarySetOpInserter},
+           {"loadStoreOpInserter", loadStoreOpInserter},
            {"insertAllocations", insertAllocations},
            {"insertRawThreadSynchronization", insertRawThreadSynchronization},
            {"reuseMemoryAllocations", reuseMemoryAllocations},
@@ -376,6 +378,14 @@ void GpuLower::analysis(Fusion* fusion) {
   // information.
   compute_at_map_ = std::make_shared<ComputeAtMap>(fusion_);
 
+  // Transitory testing of IdModel if enabled. No existing
+  // functionality should be affected. New IterDomains may be created,
+  // so it is expected that generated code may use diffrent variable
+  // names
+  if (isOptionEnabled(EnableOption::IdModel)) {
+    IdModel id_model(fusion_, false, true);
+  }
+
   resolveComputeWith(fusion_);
   dumpExprsIfEnabled(fusion_->exprs(), "resolveComputeWith");
 
@@ -473,8 +483,6 @@ void GpuLower::analysis(Fusion* fusion) {
 
   compute_at_map_->allocateIndexVariables();
   dumpExprsIfEnabled(fusion_->exprs(), "allocateIndexVariables");
-  // Run our passes keeping the lowered expressions and forwarding
-  // them
 }
 
 kir::Kernel* GpuLower::kernel() const {

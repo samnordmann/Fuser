@@ -9,6 +9,7 @@
 #pragma once
 #include <exceptions.h>
 #include <multidevice/multidevice.h>
+#include <ATen/ATen.h>
 
 namespace nvfuser {
 
@@ -19,7 +20,7 @@ namespace nvfuser {
 */
 class DeviceMesh final {
  public:
-  DeviceMesh(std::vector<DeviceIdxType> devices = {0}) {
+  DeviceMesh(std::vector<DeviceIdxType> devices = {}) {
     setDevices(devices);
   }
 
@@ -40,26 +41,26 @@ class DeviceMesh final {
     return std::find(vector_.begin(), vector_.end(), device) != vector_.end();
   }
 
-  // returns the relative index of a device in the mesh
-  // Throws if the device is not found
-  DeviceIdxType findIndex(const DeviceIdxType device) const {
-    auto it = std::find(vector_.begin(), vector_.end(), device);
-    NVF_ERROR(
-        it != vector_.end(), "device index ", device, " is not in the mesh");
-    return std::distance(vector_.begin(), it);
+  bool operator== (const DeviceMesh& other) const {
+    return vector() == other.vector(); 
+  }
+
+  void reshape(at::IntArrayRef shape) {
+    tensor_ = tensor_.reshape(shape);
   }
 
  private:
   void setDevices(std::vector<DeviceIdxType> devices) {
     vector_ = devices;
-    NVF_ERROR(!devices.empty(), "empty device mesh");
     NVF_ERROR(
         std::unique(vector_.begin(), vector_.end()) == vector_.end(),
         "device mesh has duplicates");
+    tensor_ = at::from_blob(vector_.data(), vector_.size(), at::TensorOptions().dtype(at::kInt));
   }
 
   // stores the list of device indices
   std::vector<DeviceIdxType> vector_;
+  at::Tensor tensor_;
 };
 
 std::ostream& operator<<(std::ostream& out, const DeviceMesh& mesh);

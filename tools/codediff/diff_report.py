@@ -383,11 +383,15 @@ class LogParserPyTest(LogParser):
     def compile_regex(self):
         super().compile_regex()
 
+        self.itemlist_re = re.compile(r"Running \d+ items in this shard: (.*)$")
+
+        self.wildcard_testname_re = re.compile(r"^(?P<testname>\S+::\S+) (?P<line>.*)$")
+
         self.all_test_names: list[str] | None = None
 
     def parse_line(self, line):
         if self.all_test_names is None:
-            m = re.match(r"Running \d+ items in this shard: (.*)$", line)
+            m = re.match(self.itemlist_re, line)
             if m is not None:
                 # grab the test list
                 self.all_test_names = m.groups()[0].split(", ")
@@ -409,6 +413,14 @@ class LogParserPyTest(LogParser):
                     line = testrest[1]
                 else:
                     return True
+        else:
+            # Less reliable: match any line having at least one double colon
+            # and interpret that as test name
+            m = re.match(self.wildcard_testname_re, line)
+            if m is not None:
+                d = m.groupdict()
+                self.current_test = d["testname"]
+                line = d["line"]
 
         if line == "PASSED":
             self.finalize_test(True)
@@ -545,7 +557,7 @@ class TestRun:
                     # we set nvfuser_index_t in the preamble. We ignore that change for the purposes of this diff
                     if line[:8] == "typedef " and line[-17:] == " nvfuser_index_t;":
                         line = "typedef int nvfuser_index_t; // NOTE: index type hard-coded as int for display only"
-                    if re.search(r"void kernel\d+\b", line) is not None:
+                    if re.search(r"void (nvfuser|kernel)_?\d+\b", line) is not None:
                         # we arrived at the kernel definition
                         break
                     if first:
@@ -579,7 +591,8 @@ class TestRun:
                         kern.index_type = m.groups()[0]
                 if not strip_preamble or i >= self.preamble_size_lines:
                     # replace kernel934 with kernel1 to facilitate diffing
-                    kern.code += re.sub(r"\bkernel\d+\b", "kernelN", line)
+                    # also match kernel_43 to handle new-style naming with static fusion count
+                    kern.code += re.sub(r"\bnvfuser_\d+\b", "nvfuser_N", line)
         kern.code = kern.code.rstrip()
         if strip_preamble and kern.code[-1] == "}":
             # trailing curly brace is close of namespace. This will clean it up so that we have just the kernel
@@ -642,13 +655,28 @@ def sanitize_ptx_lines(lines: list[str]) -> list[str]:
     for l in lines:
         # Replace mangled kernel names like
         #   _ZN76_GLOBAL__N__00000000_37___tmp_kernel_pointwise_f0_c1_r0_g0_cu_8995cef2_3255329nvfuser_pointwise_f0_c1_r0_g0ENS_6TensorIfLi2ELi2EEES1_S1_
+        # or
+        #   _ZN76_GLOBAL__N__00000000_37___tmp_kernel_4_cu_8995cef2_3255329nvfuser_4ENS_6TensorIfLi2ELi2EEES1_S1_
         # with
-        #   _ZN76_GLOBAL__N__00000000_37___tmp_kernel_pointwise_cu_8995cef2_3255329nvfuser_pointwiseENS_6TensorIfLi2ELi2EEES1_S1_
-        l = re.sub(
-            r"_tmp_kernel_[a-z0-9_]+nvfuser_[a-z]+_f\d+_c\d*_r\d+_g\d+", "kernel", l
-        )
+        #   _ZN11kernelscope6kernelENS_6TensorIfLi2ELi2EEES1_S1_
 
-        # Remove comments. This is important for
+        # demangle first two parts after _ZN and replace with "kernelscope" and "kernel"
+        m = re.match(r"^(?P<prefix>^.*\b_Z?ZN)(?P<scopenamelen>\d+)_", l)
+        if m is not None:
+            d = m.groupdict()
+            scopenamelen = int(d["scopenamelen"])
+            # demangle second part in remainder after scope name
+            remainder = l[(len(d["prefix"]) + len(d["scopenamelen"]) + scopenamelen) :]
+            mrem = re.match(r"^(?P<varnamelen>\d+)", remainder)
+            if mrem is not None:
+                drem = mrem.groupdict()
+                varnamelen = int(drem["varnamelen"])
+                remainder = (
+                    "6kernel" + remainder[len(drem["varnamelen"]) + varnamelen :]
+                )
+            l = d["prefix"] + "11kernelscope" + remainder
+
+        # Remove comments. This fixes mismatches in PTX "callseq" comments, which appear to be non-repeatable.
         l = re.sub(r"//.*$", "", l)
         sanitary_lines.append(l)
     return sanitary_lines
@@ -713,11 +741,14 @@ class TestDifferences:
 
             compiled_test2 = self.run2.kernel_map[testname]
 
-            if len(compiled_test1.kernels) != len(compiled_test2.kernels):
+            test1_kernel_count = len(compiled_test1.kernels)
+            test2_kernel_count = len(compiled_test2.kernels)
+            minimum_kernel_count = min(test1_kernel_count, test2_kernel_count)
+            if test1_kernel_count != test2_kernel_count:
                 print(
-                    f"WARNING: Test {testname} has different number of kernels "
-                    f"in {self.run1.directory} than in {self.run2.directory}. "
-                    "Not showing diffs for this test.",
+                    f"WARNING: Test {testname} has {test1_kernel_count} kernels "
+                    f"in {self.run1.directory} and {test2_kernel_count} kernels in {self.run2.directory}. "
+                    f"Only showing diffs for the first {minimum_kernel_count} kernels in this test.",
                     file=sys.stderr,
                 )
                 self.test_diffs.append(
@@ -730,7 +761,7 @@ class TestDifferences:
                 )
 
             kernel_diffs = []
-            for kernel_num in range(len(compiled_test1.kernels)):
+            for kernel_num in range(minimum_kernel_count):
                 kern1 = self.run1.get_kernel(testname, kernel_num, strip_preamble=True)
                 kern2 = self.run2.get_kernel(testname, kernel_num, strip_preamble=True)
                 assert kern1.code is not None
@@ -857,7 +888,10 @@ if __name__ == "__main__":
     )
     parser.add_argument("--html", action="store_true", help="Write HTML file?")
     parser.add_argument(
-        "--hide-diffs", action="store_true", help="Print diffs to STDOUT?"
+        "--hide-diffs",
+        "--no-print-diff",
+        action="store_true",
+        help="Print diffs to STDOUT?",
     )
     parser.add_argument(
         "--kernel-inclusion-criterion",

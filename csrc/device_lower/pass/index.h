@@ -80,10 +80,8 @@ class IndexLowering : private OptOutConstDispatch {
   void handle(const kir::GridSync*) final;
   void handle(const kir::MBarrierInit*) final;
   void handle(const kir::MBarrierInvalidate*) final;
-  void handle(const kir::CpAsyncWait*) final;
-  void handle(const kir::CpAsyncCommit*) final;
-  void handle(const kir::CpAsyncBulkS2GWait*) final;
-  void handle(const kir::CpAsyncBulkS2GCommit*) final;
+  void handle(const kir::AsyncWait*) final;
+  void handle(const kir::AsyncCommit*) final;
 
   void generate(const std::vector<Expr*>& exprs);
 
@@ -108,12 +106,14 @@ class IndexLowering : private OptOutConstDispatch {
       Val* val,
       Val* dst,
       const std::unordered_map<IterDomain*, Val*>& override_index = {},
-      bool generate_pointer = false) const;
+      bool generate_pointer = false,
+      DataType as_type = DataType::Null) const;
 
   Val* lowerDstIndex(
       Val* dst,
       const std::unordered_map<int, Val*>& override_index = {},
-      bool generate_pointer = false) const;
+      bool generate_pointer = false,
+      DataType as_type = DataType::Null) const;
 
   void handleCpAsyncBulkLoad(const LoadStoreOp* ldst);
   void handleCpAsyncBulkStore(const LoadStoreOp* ldst);

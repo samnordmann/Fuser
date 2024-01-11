@@ -75,9 +75,7 @@ TEST_F(NVFuserTest, FusionCyclicGraph_CUDA) {
         ir_utils::checkCycle(fusion.get()).size() == 6,
         "cycle of size 6 should be detected in fusion");
     EXPECT_THAT(
-        [&]() {
-          StmtSort::getStmtsBetween(fusion.get(), {}, fusion->outputs());
-        },
+        [&]() { StmtSort::getStmtsBetween({}, fusion->outputs()); },
         ::testing::ThrowsMessage<nvfuser::nvfError>(
             ::testing::HasSubstr("cycle detected")));
   }
@@ -115,7 +113,7 @@ TEST_F(NVFuserTest, FusionCyclicGraph_CUDA) {
     to.push_back(tv1);
     // cycle should be detected, since dead branch is in our check path
     EXPECT_THAT(
-        [&]() { StmtSort::getStmtsBetween(fusion.get(), {}, to); },
+        [&]() { StmtSort::getStmtsBetween({}, to); },
         ::testing::ThrowsMessage<nvfuser::nvfError>(
             ::testing::HasSubstr("cycle detected")));
 
@@ -139,16 +137,7 @@ TEST_F(NVFuserTest, FusionCyclicGraph_CUDA) {
     FusionExecutorCache executor_cache(std::move(fusion));
     auto outputs = executor_cache.runFusionWithInputs({t0});
 
-    auto at_var_mean = at::var_mean(t0, {1}, correction, keepdim);
-    std::vector<at::Tensor> aten_outputs = {std::get<0>(at_var_mean)};
-
-    testValidate(
-        executor_cache.fusion(),
-        outputs,
-        {t0},
-        aten_outputs,
-        __LINE__,
-        __FILE__);
+    testValidate(executor_cache.fusion(), outputs, {t0}, __LINE__, __FILE__);
   }
 }
 
@@ -428,13 +417,7 @@ TEST_F(NVFuserTest, FusionRemoveEmptyReduction_CUDA) {
   runtime.compileFusionParallel(args);
   auto outputs = runtime.runWithInputs(args);
 
-  testValidate(
-      preseg_fusion,
-      outputs,
-      aten_inputs,
-      {at::sum(at0, {0})},
-      __LINE__,
-      __FILE__);
+  testValidate(preseg_fusion, outputs, aten_inputs, __LINE__, __FILE__);
 }
 
 // In this test, a reduction over a non-empty axis occurs first, followed by a
@@ -467,13 +450,7 @@ TEST_F(NVFuserTest, FusionRemoveEmptyReductionWithNonReduction_CUDA) {
   runtime.compileFusionParallel(args);
   auto outputs = runtime.runWithInputs(args);
 
-  testValidate(
-      preseg_fusion,
-      outputs,
-      aten_inputs,
-      {at::sum(at::sum(at0, 1), 0)},
-      __LINE__,
-      __FILE__);
+  testValidate(preseg_fusion, outputs, aten_inputs, __LINE__, __FILE__);
 }
 
 // Test that we replace empty Welford with full
@@ -565,13 +542,7 @@ TEST_F(NVFuserTest, FusionRemoveEmptyCat_CUDA) {
   runtime.compileFusionParallel(args);
   auto outputs = runtime.runWithInputs(args);
 
-  testValidate(
-      preseg_fusion,
-      outputs,
-      aten_inputs,
-      {at::cat({at1, at2}, 0), at1},
-      __LINE__,
-      __FILE__);
+  testValidate(preseg_fusion, outputs, aten_inputs, __LINE__, __FILE__);
 }
 
 // Test that we replace empty tensors in pad properly
@@ -609,13 +580,7 @@ TEST_F(NVFuserTest, FusionRemoveEmptyPad_CUDA) {
   runtime.compileFusionParallel(args);
   auto outputs = runtime.runWithInputs(args);
 
-  testValidate(
-      preseg_fusion,
-      outputs,
-      aten_inputs,
-      {at::pad(at0, {1, 1}, "constant", 3.14)},
-      __LINE__,
-      __FILE__);
+  testValidate(preseg_fusion, outputs, aten_inputs, __LINE__, __FILE__);
 }
 
 // Test that we replace empty tensors in matmuls properly
@@ -660,13 +625,7 @@ TEST_F(NVFuserTest, FusionRemoveEmptyMatmul_CUDA) {
   runtime.compileFusionParallel(args);
   auto outputs = runtime.runWithInputs(args);
 
-  testValidate(
-      preseg_fusion,
-      outputs,
-      aten_inputs,
-      {at::zeros({16, 8}, options)},
-      __LINE__,
-      __FILE__);
+  testValidate(preseg_fusion, outputs, aten_inputs, __LINE__, __FILE__);
 }
 
 } // namespace nvfuser::optimization

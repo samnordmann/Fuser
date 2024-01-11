@@ -15,6 +15,7 @@
 #include <ir/internal_base_nodes.h>
 #include <ir/internal_nodes.h>
 #include <mma_type.h>
+#include <multidevice/device_mesh.h>
 #include <type.h>
 
 #include <torch/csrc/jit/ir/ir.h>
@@ -119,6 +120,8 @@ class TensorView : public Val {
   std::string toString(int indent_size = 0) const override;
 
   std::string toInlineString(int indent_size = 0) const override;
+
+  void printTransforms() const;
 
   TensorDomain* domain() const {
     return domain_;
@@ -325,6 +328,7 @@ class TensorView : public Val {
 
   //! Swizzle the rectangular tile defined by the iterdomains corresponding
   //!  to the 2 given indices.
+  TensorView* swizzle(SwizzleType swizzle_type, int x, int y);
   TensorView* swizzle(
       Swizzle2DType swizzle_type,
       int x,
@@ -414,7 +418,12 @@ class TensorView : public Val {
   //!  MmaOp, or any tv's that are involved in prolog/epilog fusions and need to
   //!  have a matching thread swizzle with the mma operand/result.
   //! More detail on usage see [WarpMmaSwizzler] in scheduler/mma_utils.h .
-  void applyMmaSwizzle(MmaOptions options);
+  void applyMmaSwizzle(MmaOperand operand);
+  // TODO: what is transpose 2? Why do we need it?
+  void applyMmaSwizzle(
+      MmaInputSmemSwizzle swizzle,
+      bool transpose,
+      bool transpose2 = false);
 
   //! Returns if this tensor view has swizzle operator on its tensor domain.
   //!  This is the temporary flag for indicating that the new swizzle
@@ -527,6 +536,19 @@ class TensorView : public Val {
     return promote_reuse_;
   }
 
+  void setDeviceMesh(const DeviceMesh& mesh) {
+    mesh_ = mesh;
+  }
+
+  const DeviceMesh& getDeviceMesh() const {
+    NVF_ERROR(hasDeviceMesh(), "DeviceMesh is not initialized");
+    return mesh_;
+  }
+
+  bool hasDeviceMesh() const {
+    return !mesh_.vector().empty();
+  }
+
  protected:
   void setDomain(TensorDomain* td) {
     domain_ = td;
@@ -598,6 +620,9 @@ class TensorView : public Val {
   //! current tensor. This will then allow us to safely reuse the memory
   //! allocated to this tensor.
   bool promote_reuse_ = false;
+
+  // Device Mesh on which the Tensor is sharded
+  DeviceMesh mesh_;
 };
 
 //! A simple TensorView builder

@@ -242,6 +242,11 @@ void Fusion::addInput(Val* input) {
         "Immediate scalar value cannot be added as an input. It is not necessary to pass it as an input.");
   }
 
+  NVF_CHECK(
+      !input->isFusionInput(),
+      "Val: ",
+      input->toString(),
+      " is already registered as input, duplicated inputs is not allowed");
   inputs_.push_back(input);
   input->setIsFusionInput(true);
 
@@ -262,15 +267,10 @@ void Fusion::addOutput(Val* output) {
   // NVF_CHECK(io_alias_.count(output) == 0,
   //     "can't register aliased output as real output");
   assertInContainer(output, "Cannot register output ");
-  if (output->isA<TensorView>()) {
-    output->as<TensorView>()->setMemoryType(MemoryType::Global);
-  } else {
-    NVF_CHECK(
-        output->isA<PipelineVal>() &&
-            output->as<PipelineVal>()->getOriginalVal()->isA<TensorView>(),
-        "Non-TensorView outputs are not supported at this point: ",
-        output->toString());
-  }
+  NVF_CHECK(
+      output->isA<TensorView>(),
+      "Non-TensorView outputs are not supported at this point: ",
+      output->toString());
 
   outputs_.push_back(output);
   output->setIsFusionOutput(true);
@@ -332,30 +332,8 @@ std::vector<Expr*> Fusion::exprs() {
   return StmtSort::getExprs(this);
 }
 
-namespace {
-
-bool allOutputsArePointerCasts(Fusion* fusion) {
-  for (Val* out : fusion->outputs()) {
-    const auto& [in, info] = fusion->getOutputAlias(out);
-    if (in == nullptr) {
-      return false;
-    }
-    NVF_ERROR(info != nullptr);
-    if (info->type != AliasType::PointerCast) {
-      return false;
-    }
-  }
-  return true;
-}
-
-} // namespace
-
 bool Fusion::isNoOp() {
   if (exprs().empty()) {
-    return true;
-  }
-
-  if (allOutputsArePointerCasts(this)) {
     return true;
   }
 
@@ -375,7 +353,7 @@ bool Fusion::isNoOp() {
 }
 
 std::vector<Val*> Fusion::inputsOf(Val* val) {
-  return InputsOf::output(this, val);
+  return InputsOf::output(val);
 }
 
 void Fusion::validateInputs() {
@@ -528,7 +506,7 @@ void Fusion::printMath(bool from_outputs_only) {
         leaf_vals.push_back(val);
       }
     }
-    exprs_for_print = StmtSort::getExprsTo(this, leaf_vals);
+    exprs_for_print = StmtSort::getExprsTo(leaf_vals);
   }
 
   debug() << "\n%kernel_math {\n";
@@ -649,7 +627,7 @@ std::vector<Val*> Fusion::usedMathVals() {
   // there can be vals that are created inside a fusion without using
   // anything from inputs. See, for example, tv0 in the
   // FusionOuterSplit test.
-  const auto inputs = InputsOf::outputs(this, outputs());
+  const auto inputs = InputsOf::outputs(outputs());
   auto used_math_vals = DependencyCheck::getAllValsBetween(
       {inputs.begin(), inputs.end()}, outputs());
   // When an expre has multiple outputs and only some of them are
@@ -783,23 +761,25 @@ bool Fusion::isAliasCompatible(Val* left, Val* right) {
 }
 
 void Fusion::aliasOutputToInput(Val* output, Val* input, const AliasType type) {
-  // `input` can be a cast of a fusion input.
-  if (!input->isFusionInput()) {
-    auto input_expr = input->definition();
+  if (type == AliasType::InplaceUpdate) {
+    // `input` can be a cast of a fusion input.
+    if (!input->isFusionInput()) {
+      auto input_expr = input->definition();
+      NVF_ERROR(
+          input_expr->isA<UnaryOp>(), "expected unary op for aliased input");
+      auto input_uop = input_expr->as<UnaryOp>();
+      NVF_ERROR(
+          input_uop->getUnaryOpType() == UnaryOpType::Cast,
+          "expected aliased input to be output of cast op");
+      input = input_uop->in();
+    }
     NVF_ERROR(
-        input_expr->isA<UnaryOp>(), "expected unary op for aliased input");
-    auto input_uop = input_expr->as<UnaryOp>();
-    NVF_ERROR(
-        input_uop->getUnaryOpType() == UnaryOpType::Cast,
-        "expected aliased input to be output of cast op");
-    input = input_uop->in();
-  }
-  NVF_ERROR(
-      input->getDataType().has_value() && output->getDataType().has_value(),
-      "requires DataType to be available for aliased output to input");
+        input->getDataType().has_value() && output->getDataType().has_value(),
+        "requires DataType to be available for aliased output to input");
 
-  if (input->getDataType().value() != output->getDataType().value()) {
-    output = castOp(input->getDataType().value(), output);
+    if (input->getDataType().value() != output->getDataType().value()) {
+      output = castOp(input->getDataType().value(), output);
+    }
   }
 
   NVF_ERROR(
@@ -816,7 +796,7 @@ void Fusion::aliasOutputToInput(Val* output, Val* input, const AliasType type) {
   }
 }
 
-std::pair<Val*, const AliasInfo*> Fusion::getOutputAlias(Val* output) {
+std::pair<Val*, const AliasInfo*> Fusion::getOutputAlias(Val* output) const {
   if (auto search = io_alias_.find(output); search != io_alias_.end()) {
     const std::pair<Val*, AliasInfo>& in_val_and_info = search->second;
     return {in_val_and_info.first, &in_val_and_info.second};

@@ -683,19 +683,8 @@ TEST_F(NVFuserTest, FusionLSTMCell_CUDA) {
   aten_inputs.insert(aten_inputs.end(), chunked2.begin(), chunked2.end());
   aten_inputs.insert(aten_inputs.end(), chunked3.begin(), chunked3.end());
 
-  auto at_ingate =
-      chunked0[0].add(chunked0[1]).add(chunked0[2]).add(chunked0[3]).sigmoid();
-  auto at_forgetgate =
-      chunked1[0].add(chunked1[1]).add(chunked1[2]).add(chunked1[3]).sigmoid();
-  auto at_cellgate =
-      chunked2[0].add(chunked2[1]).add(chunked2[2]).add(chunked2[3]).tanh();
-  auto at_outgate =
-      chunked3[0].add(chunked3[1]).add(chunked3[2]).add(chunked3[3]).sigmoid();
-
   auto at_cx = at::randn({batch_size, hidden_features}, options);
   aten_inputs.push_back(at_cx);
-  auto at_cy = at_forgetgate.mul(at_cx).add(at_ingate.mul(at_cellgate));
-  auto at_hy = at_outgate.mul(at_cy.tanh());
 
   auto lparams = schedulePointwise(&fusion, aten_inputs);
 
@@ -703,8 +692,7 @@ TEST_F(NVFuserTest, FusionLSTMCell_CUDA) {
   fe.compileFusion(&fusion, aten_inputs, lparams);
   auto cg_outputs = fe.runFusion(aten_inputs, lparams);
 
-  testValidate(
-      &fusion, cg_outputs, aten_inputs, {at_cy, at_hy}, __LINE__, __FILE__);
+  testValidate(&fusion, cg_outputs, aten_inputs, __LINE__, __FILE__);
 }
 
 TEST_F(NVFuserTest, FusionReductionHalf_CUDA) {
@@ -1219,11 +1207,6 @@ TEST_F(NVFuserTest, FusionBiasGeluFwd_CUDA) {
   auto at_input = at::randn(input_shape, options);
   auto at_bias = at::randn(bias_shape, options);
 
-  auto at_x = at_bias.to(c10::ScalarType::Double) +
-      at_input.to(c10::ScalarType::Double);
-  auto aten_output_double =
-      at_x * 0.5 * (1.0 + (k_079 * at_x * (1 + k_004 * at_x * at_x)).tanh());
-
   std::vector<c10::IValue> aten_inputs = {at_bias, at_input};
   auto lparams = schedulePointwise(&fusion, aten_inputs);
 
@@ -1231,13 +1214,7 @@ TEST_F(NVFuserTest, FusionBiasGeluFwd_CUDA) {
   fe.compileFusion(&fusion, aten_inputs, lparams);
   auto cg_outputs = fe.runFusion(aten_inputs, lparams);
 
-  testValidate(
-      &fusion,
-      cg_outputs,
-      aten_inputs,
-      {aten_output_double},
-      __LINE__,
-      __FILE__);
+  testValidate(&fusion, cg_outputs, aten_inputs, __LINE__, __FILE__);
 }
 
 TEST_F(NVFuserTest, FusionBiasGeluBwd_CUDA) {
@@ -1300,16 +1277,7 @@ TEST_F(NVFuserTest, FusionBiasGeluBwd_CUDA) {
   auto at_bias = at::randn(bias_shape, options);
   auto at_grad = at::randn(input_shape, options);
 
-  auto at_x = at_bias.to(c10::ScalarType::Double) +
-      at_input.to(c10::ScalarType::Double);
-  auto at_tanh_out = (k_079 * at_x * (1 + k_004 * at_x * at_x)).tanh();
-  auto at_ff = 0.5 * at_x *
-          ((1 - at_tanh_out * at_tanh_out) * (k_079 + k_010 * at_x * at_x)) +
-      0.5 * (1 + at_tanh_out);
-  auto at_out = at_ff * at_grad;
-
   std::vector<c10::IValue> aten_inputs = {at_grad, at_bias, at_input};
-  std::vector<at::Tensor> aten_outputs = {at_out, at_out};
 
   auto lparams = schedulePointwise(&fusion, aten_inputs);
 
@@ -1325,7 +1293,6 @@ TEST_F(NVFuserTest, FusionBiasGeluBwd_CUDA) {
       &fusion,
       cg_outputs,
       aten_inputs,
-      aten_outputs,
       __LINE__,
       __FILE__,
       "",
@@ -2767,12 +2734,7 @@ void testVarMean(at::ScalarType dtype, int correction, bool keepdim) {
   FusionExecutorCache executor_cache(std::move(fusion));
   auto outputs = executor_cache.runFusionWithInputs({t0});
 
-  auto at_var_mean = at::var_mean(t0, {1}, correction, keepdim);
-  std::vector<at::Tensor> aten_outputs = {
-      std::get<0>(at_var_mean), std::get<1>(at_var_mean)};
-
-  testValidate(
-      executor_cache.fusion(), outputs, {t0}, aten_outputs, __LINE__, __FILE__);
+  testValidate(executor_cache.fusion(), outputs, {t0}, __LINE__, __FILE__);
 }
 } // namespace
 
@@ -3567,10 +3529,6 @@ TEST_F(NVFuserTest, FusionSegmentReduceSoftmax_CUDA) {
 
   auto outputs = executor_cache.runFusionWithInputs({at_x});
 
-  auto t1 = at_x.add(1.0);
-  auto t2 = t1.sum({2});
-  auto t3 = at::_softmax(t2.to(at::kDouble), -1, false);
-
   auto optimized_fusion = executor_cache.getMostRecentKernelRuntime();
   ASSERT_TRUE(optimized_fusion->isSegmented()) << "segmentation didn't happen";
   ASSERT_EQ(optimized_fusion->fusionSegments()->groups().size(), 2)
@@ -3588,8 +3546,7 @@ TEST_F(NVFuserTest, FusionSegmentReduceSoftmax_CUDA) {
   ASSERT_EQ(rparams->unroll_factor_inner_reduction, 2)
       << "Unexpected vectorization factor";
 
-  testValidate(
-      executor_cache.fusion(), outputs, {at_x}, {t3}, __LINE__, __FILE__);
+  testValidate(executor_cache.fusion(), outputs, {at_x}, __LINE__, __FILE__);
 }
 
 TEST_F(NVFuserTest, FusionGridPersistence_CUDA) {
@@ -5398,12 +5355,7 @@ TEST_F(NVFuserTest, FusionSBAR_CUDA) {
   executor.compileFusion(&fusion, inputs, lparams);
   outputs = executor.runFusion(inputs, lparams);
 
-  auto at_scale = at::mul(at_x, at_weight);
-  auto at_scale_bias = at::add(at_scale, at_bias);
-  auto pwise_add = at::add(at_scale_bias, at_y);
-  auto output = at::relu(pwise_add);
-
-  testValidate(&fusion, outputs, inputs, {output}, __LINE__, __FILE__);
+  testValidate(&fusion, outputs, inputs, __LINE__, __FILE__);
 }
 
 TEST_F(NVFuserTest, FusionSingleElement_CUDA) {
@@ -5698,17 +5650,7 @@ TEST_F(NVFuserTest, FusionBNRepro2_CUDA) {
   std::vector<c10::IValue> aten_inputs = {input1};
   auto cg_outputs = fec.runFusionWithInputs(aten_inputs);
 
-  auto at_results = at::native_batch_norm(
-      input1_ref, r_m, r_v, weight, bias, kTraining, kMomentum, kEps);
-
-  auto at_output = std::get<0>(at_results);
-  auto at_mean = std::get<1>(at_results);
-  auto at_invstd = std::get<2>(at_results);
-
-  std::vector<at::Tensor> aten_outputs = {at_output, at_mean, at_invstd};
-
-  testValidate(
-      &fusion, cg_outputs, aten_inputs, aten_outputs, __LINE__, __FILE__);
+  testValidate(&fusion, cg_outputs, aten_inputs, __LINE__, __FILE__);
 }
 
 TEST_F(NVFuserTest, FusionZeroSizeTensorPW_CUDA) {
@@ -8263,11 +8205,7 @@ TEST_F(NVFuserTest, FusionPointwiseBroadcast_CUDA) {
   fe.compileFusion(&fusion, aten_inputs);
   auto outputs = fe.runFusion(aten_inputs);
 
-  auto at_x_add_bias = at_x + at_bias;
-  auto at_x_view = at::native::view(at_x_add_bias, output_shape);
-  auto aten_y = at::gelu(at_x_view);
-
-  testValidate(&fusion, outputs, aten_inputs, {aten_y}, __LINE__, __FILE__);
+  testValidate(&fusion, outputs, aten_inputs, __LINE__, __FILE__);
 }
 
 TEST_F(NVFuserTest, FusionPointwiseVectorize_CUDA) {
@@ -9199,10 +9137,11 @@ TEST_F(NVFuserTest, FusionPersistentBufferCalculation4_CUDA) {
   auto persistent_buffer_size =
       persistentBufferSize(&fusion, runtime_info, persistent_buffer_info);
 
+  // T1 and T2 are persistent buffers, but T2 can be projected to T1.
+  // So, the actual buffer size is just the size to save T1.
   NVF_ERROR(
       persistent_buffer_size.persistent_buffer_size ==
-      static_cast<int64_t>(
-          aten_t0.size(1) * dataTypeSize(DataType::Float) * 2));
+      static_cast<int64_t>(aten_t0.size(1) * dataTypeSize(DataType::Float)));
 
   NVF_ERROR(
       persistent_buffer_size.projected_persistent_buffer_size ==

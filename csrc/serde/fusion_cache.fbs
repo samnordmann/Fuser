@@ -8,7 +8,7 @@ namespace nvfuser.serde;
 
 // This indicates the flatbuffer compatibility. The number will bump up when a
 // breaking change is applied to the schema.
-file_identifier "NV00";
+file_identifier "NV01";
 
 // =====================================================================================
 // Enum definitions
@@ -70,12 +70,12 @@ enum RecordType: int {
     Ternary_Alpha_VAL_VAL_TV,
     Ternary_Alpha_TV_VAL_VAL,
     Ternary_Alpha_VAL_TV_VAL,
+    NormalDistOp,
     OutputTv,
     OutputVal,
     PadOp,
     PermuteOp,
     StrideOrderOp,
-    RandomOp,
     ReductionMax,
     ReductionMin,
     ReductionProd,
@@ -89,6 +89,7 @@ enum RecordType: int {
     Start,
     Tensor,
     TensorSizes,
+    UniformDistOp,
     VarianceOp,
     VarianceMeanOp,
     Vector,
@@ -115,7 +116,6 @@ union RecordData {
   Scalar,
   Size,
   Tensor,
-  TensorCreation,
   TensorCreationSymbolic,
   Vector,
 }
@@ -315,17 +315,9 @@ table Tensor {
   is_cpu: bool;
 }
 
-// Data for FullOpRecord
-// The shape is defined with constant numbers.
-table TensorCreation {
-  shape: [long];
-  dtype: long;
-}
-
-// Data for RandomOpRecord
+// Data for RandomDistOpRecord
 // The shape is symbolic.
 table TensorCreationSymbolic {
-  shape: [State];
   dtype: long;
 }
 
@@ -370,6 +362,41 @@ table FusionExecutor {
   compiled_kernel: CudaKernel;
 }
 
+// A directed edge on DAG, which wraps a value that connects segmented groups.
+table SegmentedEdge {
+  from_segmented_group: long;
+  to_segmented_group: long;
+  val: long;
+}
+
+// Each SegmentedGroup represents a segmented fusion.
+table SegmentedGroup {
+  producer_edges: [long];
+  consumer_edges: [long];
+  input_vals: [long];
+  output_vals: [long];
+  group_id: int;
+  heuristic: long;
+  exprs: [long];
+  level: int;
+  visited: bool;
+  merge_with_segmented_group: long;
+  merge_through_segmented_edge: long;
+  merged: bool;
+  is_fusion_input: bool;
+}
+
+// The SegmentedFusion represents a segmented fusion graph that owns the segmented groups.
+table SegmentedFusion {
+  segmented_fusion_name: ulong;
+  num_vals: ulong;
+  num_exprs: ulong;
+  edges: [SegmentedEdge];
+  groups: [SegmentedGroup];
+  force_fp16_tv_set: [long];
+  force_half_precision_type: long;
+}
+
 // Each FusionKernelRuntime represents a concretized, segmented Fusion.
 // We store the metadata for the original arguments to segment, schedule, and compile the Fusion at deserialization.
 // Each fusion segment is given a FusionExecutor.
@@ -380,6 +407,7 @@ table FusionKernelRuntime {
   runtime_id: long;
   args: KernelArgumentHolder;
   executors: [FusionExecutor];
+  segmented_fusion: SegmentedFusion;
 }
 
 // EncodingEntry for InputsIdLookup LRU cache.
@@ -457,6 +485,10 @@ table FusionCache {
   auto_gen_schedules: [FusionExecutorCache];
   // static fusion executor counter
   global_fusion_count: long;
+  device_major: long;
+  device_minor: long;
+  cuda_major: long;
+  cuda_minor: long;
 }
 
 root_type FusionCache;

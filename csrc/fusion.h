@@ -90,10 +90,10 @@ enum class AliasType : int {
   // For example, the tensor storing BatchNorm's running mean. The output EMA is
   // updated in place.
   InplaceUpdate,
-  // For example, the output of a ViewOp is merely a pointer cast of the input.
-  // In this case, we use `ExpressionEvaluator` (instead of a kernel) to compute
-  // the output tensor.
-  PointerCast,
+  // For example, the output of a ViewOp is merely a pointer arithmetic of the
+  // input.  In this case, we use `ExpressionEvaluator` (instead of a kernel) to
+  // cheaply compute the output tensor.
+  PointerArithmetic,
 };
 
 struct AliasInfo {
@@ -237,14 +237,20 @@ class Fusion : public IrContainer {
   // Note: this is not always safe and should be used with extra caution.
   // Currently the only place it's used is in the running stats update for batch
   // normalization.
+  //
+  // TODO(wujingyue): Rename this method because `input` can be another fusion
+  // output.
+  //
   // TODO: alias should be made aware to segmentation, so we'll always include
-  // the input tensor to the section where output is produced.
+  // the input tensor to the section where output is produced. Currently,
+  // aliases of type `PointerArithmetics` are marked after segmentation, but
+  // those of type `InplaceUpdate` are marked in fusion definitions.
   void aliasOutputToInput(Val* output, Val* input, AliasType type);
 
   //! Returns the aliased input of a given output along with an `AliasInfo`
   //! describing how they alias. Returns <nullptr,nullptr> when `output` is not
   //! aliased.
-  std::pair<Val*, const AliasInfo*> getOutputAlias(Val* output);
+  std::pair<Val*, const AliasInfo*> getOutputAlias(Val* output) const;
 
   // mark input at index to be permuted by permutation
   void setPermutationOnInput(int index, std::vector<int64_t> permutation) {
@@ -274,11 +280,6 @@ class Fusion : public IrContainer {
 
   bool isUpdatingTVUseInfo() {
     return is_during_update_uses_;
-  }
-
-  // TODO: Have getOutputAlias expose AliasInfo and then remove this method.
-  const std::unordered_map<Val*, std::pair<Val*, AliasInfo>>& ioAlias() const {
-    return io_alias_;
   }
 
   // NOTE: [Fusion managed data]
@@ -426,13 +427,13 @@ class Fusion : public IrContainer {
   //! True if any of tensors has a symblic axis
   bool hasDynamicTransform();
 
+  static IrCloner copy(const Fusion* from, Fusion* to);
+
  protected:
   friend SegmentCandidateFinder;
   friend SegmentedFusion;
   friend class TranslateApplicableWelford;
   friend Val;
-
-  static IrCloner copy(const Fusion* from, Fusion* to);
 
   using IrContainer::registerExpr;
   using IrContainer::registerVal;
