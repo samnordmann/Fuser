@@ -32,6 +32,7 @@
 #include <scheduler/reduction_utils.h>
 #include <scheduler/utils.h>
 #include <test/multidevice.h>
+#include <test/validator.h>
 #include <torch/csrc/jit/codegen/cuda/interface.h>
 #include <transform_replay.h>
 #include <transform_rfactor.h>
@@ -486,6 +487,151 @@ TEST_F(PipelineTest, matmul_summa) {
   std::cout << std::endl;
 }
 
+// 1D tensor parallel 
+// Inputs: X[N,K], A^T[M, K], B[M,0]
+// Compute: Y = Matmul(X, A), Z = Matmul(Y, B)
+// sharding: A, B are row-wise sharded (M)
+TEST_F(PipelineTest, matmuls_megatron_mlp) {
+  std::unique_ptr<Fusion> fusion = std::make_unique<Fusion>();
+  FusionGuard fg(fusion.get());
+  int num_devices = 4;
+  std::vector<DeviceIdxType> mesh({0, 1, 2, 3});
+
+  TensorView* tvx = makeContigTensor(2); // (N,K)
+  TensorView* tva = makeContigTensor(2); // (M,K) 
+  TensorView* tvb = makeContigTensor(2); // (M,O)
+
+  // Matmul 1: tvx x tva -> y (N,M)
+  TensorView* tvx_b = broadcast(tvx, {true, false, false}); // (M,N,K)
+  TensorView* tva_b = broadcast(tva, {false, true, false}); // (M,N,K)
+  TensorView* tvxa = mul(tvx_b, tva_b); // (M,N,K)
+  TensorView* tvy = sum(tvxa, {2}); // (M,N) yT
+
+    // Matmul 2: y^T (M, N) x tvb (M, O) -> z (N,O)
+  TensorView* tvy_b = broadcast(tvy, {false, false, true}); // (M,N,O)
+  TensorView* tvb_b = broadcast(tvb, {false, true, false}); // (M,N,O)
+  TensorView* tvyb = mul(tvy_b, tvb_b); // (M,N,O)
+  TensorView* tvz = sum(tvyb, {0}); // (N,O)
+
+  // TODO: enable with multidevice executor
+  // Matmul 1 sharding: Dimension M sharded
+  // X not sharded
+  // A sharded along M 
+  // tva->split(0, num_devices, false); // (D,M//D,K)
+  // tva->axis(0)->parallelize(ParallelType::DIDx); 
+
+  // // Intermediates tvx_b, tva_b, tvxa sharded along M
+  // // TODO: propogate sharding from inputs
+  // tvx_b->split(0, num_devices, false); // (D,M//D,N,K)
+  // tvx_b->axis(0)->parallelize(ParallelType::DIDx);
+  // tva_b->split(0, num_devices, false); // (D,M//D,N,K)
+  // tva_b->axis(0)->parallelize(ParallelType::DIDx);
+  // tvxa->split(0, num_devices, false); // (D,M//D,N,K)
+  // tvxa->axis(0)->parallelize(ParallelType::DIDx);
+  
+  // // Y's sharding
+  // tvy->split(0, num_devices, false); // (D,M//D, N)
+  // tvy->axis(0)->parallelize(ParallelType::DIDx); 
+
+  // // B row-wise sharded
+  // tvb->split(0, num_devices, false); // (D,M//D,O)
+  // tvb->axis(0)->parallelize(ParallelType::DIDx); 
+
+  // // intermediates sharded along M
+  // tvy_b->split(0, num_devices, false); // (D,M//D,N,O)
+  // tvy_b->axis(0)->parallelize(ParallelType::DIDx);
+  // tvb_b->split(0, num_devices, false); // (D,M//D,N,O)
+  // tvb_b->axis(0)->parallelize(ParallelType::DIDx);
+  // tvyb->split(0, num_devices, false); // (D,M//D,N,O)
+  // tvyb->axis(0)->parallelize(ParallelType::DIDx);
+
+  fusion->addInput(tvx);
+  fusion->addInput(tva);
+  fusion->addInput(tvb);
+  fusion->addOutput(tvy);
+  fusion->addOutput(tvz);
+
+  std::vector<TensorView*> tvs = {tvx, tva, tvb, tvx_b, tva_b, tvxa, tvy,
+    tvy_b, tvb_b, tvyb, tvz};
+  for (auto tv : tvs) {
+    tv->setDeviceMesh(mesh);
+    tv->setMemoryType(MemoryType::Global);
+  }
+
+  int n = 3;
+  int k = 5;
+  int m = num_devices;
+  int o = 6;
+  auto x = at::randn({n, k}, tensor_options);
+  auto aT = at::randn({m, k}, tensor_options);
+  auto b = at::randn({m, o}, tensor_options);
+  inputs = {x, aT, b};
+  auto y = at::matmul(x, aT.transpose(0,1));
+  auto z = at::matmul(y, b);
+
+  FusionExecutor fe;
+  fe.compileFusion(fusion.get(), inputs);
+  auto outputs = fe.runFusion(inputs);
+  // TODO:
+  // MultiDeviceExecutor runtime(std::move(fusion), *communicator);
+  // auto outputs = runtime.runWithInput(inputs);
+    testValidate(
+        fusion.get(), outputs, inputs, {y.transpose(0,1), z}, __LINE__, __FILE__);
+}
+
+TEST_F(PipelineTest, matmul_megatron_attention) {
+  // ignoring embarassingly parallel attention heads
+  // todo: missing fusing cross-entropy loss sharded computation
+  FusionGuard fg(fusion.get());
+  int num_devices = 4;
+  std::vector<DeviceIdxType> mesh({0, 1, 2, 3});
+
+  TensorView* tvx = makeContigTensor(2);  // (S,H*D)
+  TensorView* tvw = makeContigTensor(2);  // w^T (D_model, H*D) 
+  fusion->addInput(tvx);
+  fusion->addInput(tvw);
+
+  // Matmul 1: tvx x tva -> y (N,M)
+  TensorView* tvx_b = broadcast(tvx, {true, false, false}); // (D_model, S, H*D)
+  TensorView* tvw_b = broadcast(tvw, {false, true, false}); // (D_model, S, H*D)
+  TensorView* tvxw = mul(tvx_b, tvw_b); // (D_model, S, H*D)
+  TensorView* tvy = sum(tvxw, {2}); // (D_model, S) y^T
+  fusion->addOutput(tvy);
+
+  // input and output tensors are not sharded 
+  // matmul weights are sharded along the vocabulary dimension (D_model)
+  // tvw->split(0, num_devices, false);
+  // tvw->axis(0)->parallelize(ParallelType::DIDx); 
+  // tvx_b->split(0, num_devices, false);
+  // tvx_b->axis(0)->parallelize(ParallelType::DIDx); 
+  // tvxw->split(0, num_devices, false);
+  // tvxw->axis(0)->parallelize(ParallelType::DIDx); 
+
+  std::vector<TensorView*> tvs = {tvx, tvw, tvx_b, tvw_b, tvxw, tvy};
+  for (auto tv : tvs) {
+    tv->setDeviceMesh(mesh);
+    tv->setMemoryType(MemoryType::Global);
+  }
+  
+  int H = 4;
+  int S = 8;
+  int D_model = num_devices;
+  int D = 3;
+  auto x = at::randn({S, H*D}, tensor_options);
+  auto wT = at::randn({D_model, H*D}, tensor_options);
+  inputs = {x, wT};
+  auto y = at::matmul(x, wT.transpose(0,1));
+  
+  FusionExecutor fe;
+  fe.compileFusion(fusion.get(), inputs);
+  auto outputs = fe.runFusion(inputs);
+  // TODO:
+  // MultiDeviceExecutor runtime(std::move(fusion), *communicator);
+  // auto outputs = runtime.runWithInput(inputs);
+
+  testValidate(
+      fusion.get(), outputs, inputs, {y.transpose(0, 1)}, __LINE__, __FILE__);
+}
 } // namespace nvfuser
 
 #endif
