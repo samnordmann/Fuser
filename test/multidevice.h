@@ -54,7 +54,6 @@ class MultiDeviceTest : public NVFuserTest {
       if (it != devices.end()) {
         i = *it;
       }
-      std::cout << "Size " << tensor.index({at::indexing::Slice(i, i+1), "..."}).sizes() << std::endl;
       return tensor.index({at::indexing::Slice(i, i+1), "..."});
     }
  protected:

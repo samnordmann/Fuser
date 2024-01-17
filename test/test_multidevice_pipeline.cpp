@@ -498,6 +498,8 @@ TEST_F(PipelineTest, matmul_summa) {
 // Inputs: X[N,K], A^T[M, K], B[M,0]
 // Compute: Y = Matmul(X, A), Z = Matmul(Y, B)
 // sharding: A, B are row-wise sharded (M)
+// TODO: Temporary hack of adding a zero bias so that global output buffer
+// is properly allocated.
 TEST_F(PipelineTest, matmuls_megatron_mlp) {
   std::unique_ptr<Fusion> fusion = std::make_unique<Fusion>();
   FusionGuard fg(fusion.get());
@@ -514,7 +516,6 @@ TEST_F(PipelineTest, matmuls_megatron_mlp) {
   TensorView* tvx = makeConcreteTensor({N, K}); // (N,K)
   TensorView* tva = makeConcreteTensor({M, K}); // (M,K) 
   TensorView* tvb = makeConcreteTensor({M, O}); // (M,O)
-  // Temp hack - remove later. 
   TensorView* bias = makeConcreteTensor({N, O}); 
 
   // Matmul 1: tvx x tva -> y (N,M)
@@ -566,7 +567,7 @@ TEST_F(PipelineTest, matmuls_megatron_mlp) {
   fusion->addInput(tvb);
   fusion->addInput(bias);
   fusion->addOutput(tvy);
-  fusion->addOutput(tvz);
+  // fusion->addOutput(tvz);
   fusion->addOutput(tvz_);
 
   std::vector<TensorView*> tvs = {tvx, tva, tvb, tvx_b, tva_b, tvxa, tvy,
@@ -578,29 +579,24 @@ TEST_F(PipelineTest, matmuls_megatron_mlp) {
   auto x = at::randn({N, K}, tensor_options);
   auto aT = at::randn({M, K}, tensor_options);
   auto b = at::randn({M, O}, tensor_options);
-  // inputs = {x, shardInputTensor(aT, mesh, communicator->deviceId()),
-  //   shardInputTensor(b, mesh, communicator->deviceId())};
   auto zero = at::zeros({N, O}, tensor_options);
-  inputs = {x, aT, b, zero};
+  auto myDevice = communicator->deviceId();
+  inputs = {x, shardInputTensor(aT, mesh, myDevice),
+    shardInputTensor(b, mesh, myDevice), zero};
   auto y = at::matmul(x, aT.transpose(0,1));
   auto z = at::matmul(y, b);
-  if (communicator->deviceId() == 0) {
-    std::cout << "Y " << y.transpose(0,1) << std::endl;
-    std::cout << "Z " << z << std::endl;
-  }
+  auto expected_outputs = {shardInputTensor(y.transpose(0,1), mesh, myDevice), z};
 
   MultiDeviceExecutor runtime(std::move(fusion), *communicator);
   auto outputs = runtime.runWithInput(inputs);
-  for (auto o : outputs) {
-    std::cout << o << std::endl;
-  }
     testValidate(
-        runtime.fusion(), outputs, inputs, {y.transpose(0,1), z, z}, __LINE__, __FILE__);
+        runtime.fusion(), outputs, inputs, expected_outputs, __LINE__, __FILE__);
 }
 
+// TODO: Temporary hack of adding a zero bias so that global output buffer
+// is properly allocated.
 TEST_F(PipelineTest, matmul_megatron_attention) {
   // ignoring embarassingly parallel attention heads
-  // todo: missing fusing cross-entropy loss sharded computation
   FusionGuard fg(fusion.get());
   int num_devices = communicator->size();
   std::vector<int64_t> devices(num_devices);
@@ -614,15 +610,18 @@ TEST_F(PipelineTest, matmul_megatron_attention) {
 
   TensorView* tvx = makeConcreteTensor({S, H*D});  // (S,H*D)
   TensorView* tvw = makeConcreteTensor({D_model, H*D});  // w^T (D_model, H*D) 
+  TensorView* bias = makeConcreteTensor({D_model, S}); 
   fusion->addInput(tvx);
   fusion->addInput(tvw);
+  fusion->addInput(bias);
 
   // Matmul 1: tvx x tva -> y (N,M)
   TensorView* tvx_b = broadcast(tvx, {true, false, false}); // (D_model, S, H*D)
   TensorView* tvw_b = broadcast(tvw, {false, true, false}); // (D_model, S, H*D)
   TensorView* tvxw = mul(tvx_b, tvw_b); // (D_model, S, H*D)
   TensorView* tvy = sum(tvxw, {2}); // (D_model, S) y^T
-  fusion->addOutput(tvy);
+  TensorView* tvy_ = add(tvy, bias);
+  fusion->addOutput(tvy_);
 
   // input and output tensors are not sharded 
   // matmul weights are sharded along the vocabulary dimension (D_model)
@@ -635,15 +634,15 @@ TEST_F(PipelineTest, matmul_megatron_attention) {
   // tvxw->split(0, num_devices, false);
   tvxw->axis(0)->parallelize(ParallelType::DIDx); 
 
-  std::vector<TensorView*> tvs = {tvx, tvw, tvx_b, tvw_b, tvxw, tvy};
+  std::vector<TensorView*> tvs = {tvx, tvw, tvx_b, tvw_b, tvxw, tvy, bias, tvy_};
   for (auto tv : tvs) {
     tv->setDeviceMesh(mesh);
   }
   
   auto x = at::randn({S, H*D}, tensor_options);
   auto wT = at::randn({D_model, H*D}, tensor_options);
-  inputs = {x, wT};
-  // inputs = {x, shardInputTensor(wT, mesh, communicator->deviceId())};
+  auto zero = at::zeros({D_model, S}, tensor_options);
+  inputs = {x, shardInputTensor(wT, mesh, communicator->deviceId()), zero};
   auto y = at::matmul(x, wT.transpose(0,1));
   
   MultiDeviceExecutor runtime(std::move(fusion), *communicator);
