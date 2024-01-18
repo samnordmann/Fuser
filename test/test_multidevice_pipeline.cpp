@@ -633,9 +633,8 @@ TEST_F(PipelineTest, matmul_megatron_attention) {
   TensorView* qkv_b = broadcast(qkv, {false, false, false, true}); // (H, S, Dv, Dmodel)
   TensorView* w_b = broadcast(w, {false, true, false, false}); // (H, S, Dv, Dmodel)
   TensorView* y0 = mul(qkv_b, w_b); 
-  TensorView* y0_ = set(y0); // Temporarily force y0 to be fully replicated
-  TensorView* y1 = sum(y0_, {2}); // (H, S, Dmodel)
-  TensorView* y2 = sum(y1, {0}); // (S, Dmodel)
+  TensorView* y1 = sum(y0, {0}); // (S, Dv, Dmodel) // TODO: Reduce Dv first
+  TensorView* y2 = sum(y1, {1}); // (S, Dmodel)
   TensorView* y = add(y2, bias);
   fusion->addOutput(qk);
   fusion->addOutput(qkv);
@@ -649,7 +648,7 @@ TEST_F(PipelineTest, matmul_megatron_attention) {
   }
 
   // All other tensorviews that are not sharded
-  std::vector<TensorView*> tvs = {y0_, y1, y2, y, bias};
+  std::vector<TensorView*> tvs = {y1, y2, y, bias};
   for (auto tv : tvs) {
     tv->setDeviceMesh(mesh);
   }
@@ -678,6 +677,7 @@ TEST_F(PipelineTest, matmul_megatron_attention) {
   auto outputs = runtime.runWithInput(inputs);
   testValidate(
         runtime.fusion(), outputs, inputs, expected_outputs, __LINE__, __FILE__);
+
 }
 } // namespace nvfuser
 
