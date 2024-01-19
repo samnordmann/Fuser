@@ -15,6 +15,7 @@
 #include <ops/all_ops.h>
 #include <test/multidevice.h>
 #include <test/validator.h>
+#include <multidevice/communication.h>
 
 namespace nvfuser {
 TEST_F(MultiDeviceTest, ShardOuterAxisConcrete) {
@@ -184,12 +185,17 @@ TEST_F(MultiDeviceTest, ShardInnerAxis) {
 }
 
 
-inline at::Tensor shardInputTensor(at::Tensor tensor, int deviceId) {
-  return tensor.index({deviceId, "..."}).unsqueeze(0);
+inline at::Tensor shardInputTensor(at::Tensor tensor, int axis, int deviceId) {
+  std::vector<at::indexing::TensorIndex> indices(tensor.dim(), at::indexing::Slice());
+  indices[axis] = at::indexing::Slice(deviceId, deviceId+1);
+  auto x = tensor.index(indices).contiguous();
+  std::cout << "Input " << tensor << std::endl;
+  std::cout << "Sharded input " << deviceId << " " << x << std::endl;
+  return x;
 }
 
 TEST_F(MultiDeviceTest, ShardGlobalInput) {
-  int sharded_dim = 0;
+  int sharded_dim = 1;
   std::unique_ptr<Fusion> fusion = std::make_unique<Fusion>();
   FusionGuard fg(fusion.get());
   int num_devices = communicator->size();
@@ -197,27 +203,39 @@ TEST_F(MultiDeviceTest, ShardGlobalInput) {
   std::iota(ranks.begin(), ranks.end(), 0);
   DeviceMesh mesh(ranks);
 
-  TensorView* tv0 = makeContigTensor(3);
-  TensorView* tv1 = sum(tv0, {0});
+  // TensorView* tv0 = makeContigTensor(3);
+  TensorView* tv0 = makeConcreteTensor({3, 2, 2});
+  TensorView* tv0_ = set(tv0);
+  // TODO: sum over a non-sharded dim should not trigger allreduce
+  TensorView* tv1 = sum(tv0_, {0});
   TensorView* tv2 = add(tv1, tv1);
   fusion->addInput(tv0);
   fusion->addOutput(tv2);
 
   tv0->axis(sharded_dim)->parallelize(ParallelType::DIDx);
 
-  std::vector<TensorView*> tvs = {tv0, tv1, tv2};
+  std::vector<TensorView*> tvs = {tv0_, tv0, tv1, tv2};
   for (auto tv : tvs) {
     tv->setDeviceMesh(mesh);
   }
 
-  auto x = at::randn({num_devices, 3, 2}, tensor_options);
-  // Sharded input shape [1, 3, 2]
-  std::vector<c10::IValue> inputs = {
-      shardInputTensor(x, communicator->deviceId())};
+  if (communicator->deviceId() == 0) {
+    fusion->printKernel();
+  }
+
+  std::cout << "TV0 " << tv0->toString() << std::endl;
+
+  std::vector<int64_t> global_input_shape = {3, 2, 2};
+  global_input_shape[sharded_dim] = num_devices;
+  auto x = at::randn(global_input_shape, tensor_options);
+  std::vector<c10::IValue> inputs = 
+    {shardInputTensor(x, sharded_dim, communicator->deviceId())};
   auto ref_outputs = at::sum(x, {0}) * 2;
+  std::cout << "Expected Outputs " << ref_outputs << std::endl;
 
   MultiDeviceExecutor runtime(std::move(fusion), *communicator);
   auto outputs = runtime.runWithInput(inputs);
+  std::cout << "Output " << outputs << std::endl;
   testValidate(
       runtime.fusion(), outputs, inputs, {ref_outputs}, __LINE__, __FILE__);
 }

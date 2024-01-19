@@ -206,9 +206,11 @@ std::vector<std::shared_ptr<Communication>> lowerCommunication(
       isSharded(input_tv) && sender_mesh.vector().size() > 1;
   const bool is_output_sharded =
       isSharded(output_tv) && receiver_mesh.vector().size() > 1;
+  std::cout << input_tv->toString() << " " << is_input_sharded << " " << (sender_mesh.vector().size() > 1) << std::endl;
+  std::cout << output_tv->toString() << " " << is_output_sharded << " " << (receiver_mesh.vector().size() > 1) << std::endl;
 
-  // int input_sharded_dim = dimWithParallelType(input_tv, ParallelType::DIDx);
-  // int output_sharded_dim = dimWithParallelType(output_tv, ParallelType::DIDx);
+  int input_sharded_dim = dimWithParallelType(input_tv, ParallelType::DIDx);
+  int output_sharded_dim = dimWithParallelType(output_tv, ParallelType::DIDx);
 
   auto original_expr = output_tv->definition();
   NVF_ERROR(
@@ -218,17 +220,16 @@ std::vector<std::shared_ptr<Communication>> lowerCommunication(
       " to communication is not supported");
   bool is_reduction = original_expr->isA<ReductionOp>();
 
-  // TODO: Check valid sharding.
-  // NVF_ERROR(
-  //     !is_input_sharded || !input_tensor.numel() ||
-  //         static_cast<size_t>(input_tensor.size(0)) == 1,
-  //     "Sharded dimension should have allocation size 1, but is ",
-  //     input_tensor.size(0));
-  // NVF_ERROR(
-  //     !is_output_sharded || !output_tensor.numel() || is_reduction ||
-  //         static_cast<size_t>(output_tensor.size(0)) == 1,
-  //     "Sharded dimension should have allocation size 1, but is ",
-  //     output_tensor.size(0));
+  NVF_ERROR(
+      !is_input_sharded || !input_tensor.numel() ||
+          static_cast<size_t>(input_tensor.size(input_sharded_dim)) == 1,
+      "Sharded dimension should have allocation size 1, but is ",
+      input_tensor.size(input_sharded_dim));
+  NVF_ERROR(
+      !is_output_sharded || !output_tensor.numel() || is_reduction ||
+          static_cast<size_t>(output_tensor.size(output_sharded_dim)) == 1,
+      "Sharded dimension should have allocation size 1, but is ",
+      output_tensor.size(output_sharded_dim));
   if (is_reduction) {
     BinaryOpType op_type =
         output_tv->definition()->as<ReductionOp>()->getReductionOpType();

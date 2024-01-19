@@ -78,11 +78,11 @@ class CommunicationTest
 class PipelineTest : public MultiDeviceTest {
  protected:
   void SetUp() override;
-  void validate(DeviceIdxType tester = 0, bool auto_schedule = true);
+  void validate(std::vector<c10::IValue> unsharded_inputs, DeviceIdxType tester = 0, bool auto_schedule = true);
   void execute();
-  void executeAndValidate() {
+  void executeAndValidate(std::vector<c10::IValue> unsharded_inputs) {
     execute();
-    validate();
+    validate(unsharded_inputs);
   }
   std::unique_ptr<MultiDeviceExecutor> runtime;
   std::unique_ptr<Fusion> fusion;

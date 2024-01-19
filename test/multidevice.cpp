@@ -208,25 +208,25 @@ c10::IValue allocate_unsharded_input(
 // Utility function used for validation in the tests
 // It compares the given (possibly sharded) output with the result of the Fusion
 // run on a single device with the given (possibly sharded) inputs
-void PipelineTest::validate(DeviceIdxType tester, bool auto_schedule) {
+void PipelineTest::validate(std::vector<c10::IValue> unsharded_inputs, DeviceIdxType tester, bool auto_schedule) {
   recordEvent("gather inputs at tester");
   // gathering all the inputs at tester
-  std::vector<c10::IValue> unsharded_inputs;
-  for (auto i : c10::irange(inputs.size())) {
-    TensorView* tv = runtime->fusion()->inputs().at(i)->as<TensorView>();
-    c10::IValue unsharded_input = isSharded(tv)
-        ? allocate_unsharded_input(tester, tv, inputs.at(i).toTensor())
-        : inputs.at(i).deepcopy();
-    unsharded_inputs.push_back(unsharded_input);
+  // std::vector<c10::IValue> unsharded_inputs;
+  // for (auto i : c10::irange(inputs.size())) {
+  //   TensorView* tv = runtime->fusion()->inputs().at(i)->as<TensorView>();
+  //   c10::IValue unsharded_input = isSharded(tv)
+  //       ? allocate_unsharded_input(tester, tv, inputs.at(i).toTensor())
+  //       : inputs.at(i).deepcopy();
+  //   unsharded_inputs.push_back(unsharded_input);
 
-    SendToTester(
-        tv,
-        inputs.at(i).toTensor(),
-        unsharded_inputs.at(i).toTensor(),
-        tester,
-        runtime->comm(),
-        debug_print);
-  }
+  //   SendToTester(
+  //       tv,
+  //       inputs.at(i).toTensor(),
+  //       unsharded_inputs.at(i).toTensor(),
+  //       tester,
+  //       runtime->comm(),
+  //       debug_print);
+  // }
 
   std::unique_ptr<FusionExecutorCache> unsharded_fec;
   // allocate output buffers for the tester
@@ -327,7 +327,7 @@ void PipelineTest::execute() {
   recordEvent("run the multidevice fusion");
   outputs = runtime->runWithInput(inputs);
 
-  if (debug_print) {
+  if (true) {
     std::stringstream ss;
     std::string indent = "  ";
     ss << "Device " << communicator->deviceId() << "'s outputs:{\n";

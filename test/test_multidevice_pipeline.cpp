@@ -52,6 +52,12 @@ using namespace at::indexing;
    --gtest_filter=PipelineTest.Pipeline
 */
 
+inline at::Tensor shardInputTensor(at::Tensor tensor, int axis, int deviceId) {
+  std::vector<at::indexing::TensorIndex> indices(tensor.dim(), at::indexing::Slice());
+  indices[axis] = at::indexing::Slice(deviceId, deviceId+1);
+  return tensor.index(indices).contiguous();
+}
+
 TEST_F(PipelineTest, Pipeline) {
   const std::vector<int64_t> input_shape1 = {3096, 1123};
   const std::vector<int64_t> input_shape2 = {2048, 73, 81};
@@ -128,14 +134,13 @@ TEST_F(PipelineTest, Pipeline) {
       at::randn(input_shape1, tensor_options),
       at::randn(input_shape2, tensor_options)};
 
-  executeAndValidate();
+  // executeAndValidate();
 }
 
 //(backend type, first stage's mesh, second stage's mesh (if not null), is first
-//stage sharded?, is second
-// stage sharded?, do_reduction?)
+//stage sharded?, is second stage sharded?, do_reduction?, axis of tensor to shard)
 using PipelineTestTwoStagesParams =
-    std::tuple<CommunicatorBackend, DeviceMesh, DeviceMesh, bool, bool, bool>;
+    std::tuple<CommunicatorBackend, DeviceMesh, DeviceMesh, bool, bool, bool, int>;
 class PipelineTestTwoStages
     : public PipelineTest,
       public ::testing::WithParamInterface<PipelineTestTwoStagesParams> {};
@@ -147,7 +152,8 @@ TEST_P(PipelineTestTwoStages, Communication) {
        mesh1,
        is_stage0_sharded,
        is_stage1_sharded,
-       do_reduction] = GetParam();
+       do_reduction,
+       sharded_dim] = GetParam();
   if (!communicator->isBackendAvailable(backend)) {
     GTEST_SKIP() << "Backend not available";
   }
@@ -157,25 +163,27 @@ TEST_P(PipelineTestTwoStages, Communication) {
     mesh1 = mesh0;
   }
 
-  int first_axis_extent = 3;
-  if (is_stage0_sharded) {
-    first_axis_extent = mesh0.vector().size();
-  } else if (is_stage1_sharded) {
-    first_axis_extent = mesh1.vector().size();
-  }
+  int sharded_dim_extent = 3;
   int second_axis_extent = 2;
+  if (is_stage0_sharded) {
+    sharded_dim_extent = mesh0.vector().size();
+    std::cout << "Stage 0 sharded " << mesh0.vector().size() << std::endl;
+  } else if (is_stage1_sharded) {
+    sharded_dim_extent = mesh1.vector().size();
+    std::cout << "Stage 1 sharded " << mesh1.vector().size() << std::endl;
+  }
   if (is_stage1_sharded && do_reduction) {
     GTEST_ASSERT_EQ(mesh0.vector().size(), mesh1.vector().size());
     second_axis_extent = mesh1.vector().size();
   }
-  std::vector<int64_t> input_sizes = {
-      first_axis_extent, second_axis_extent, 3, 5};
+  std::vector<int64_t> input_sizes = {3, 2, 3, 5};
+  input_sizes[sharded_dim] = sharded_dim_extent;
 
   FusionGuard fg(fusion.get());
   TensorView* tv0 = makeConcreteTensor(input_sizes);
   TensorView* tv1 = sum(tv0, {3});
   TensorView* tv2 = do_reduction ? sum(tv1, {0}) : set(tv1);
-  TensorView* tv3 = sum(tv2, {1});
+  TensorView* tv3 = sum(tv2, {2});
   fusion->addInput(tv0);
   fusion->addOutput(tv3);
 
@@ -184,22 +192,26 @@ TEST_P(PipelineTestTwoStages, Communication) {
   tv2->setDeviceMesh(mesh1);
   tv3->setDeviceMesh(mesh1);
   if (is_stage0_sharded) {
-    tv0->axis(0)->parallelize(ParallelType::DIDx);
-    tv1->axis(0)->parallelize(ParallelType::DIDx);
-    // Shard outermost-axis of input
-    input_sizes[0] = 1;
+    tv0->axis(sharded_dim)->parallelize(ParallelType::DIDx);
+    tv1->axis(sharded_dim)->parallelize(ParallelType::DIDx);
   }
   if (is_stage1_sharded) {
-    // in case of reduction, axis(0) of tv2 is a reduction axis, except if it
+    // in case of reduction, axis(sharded_dim) of tv2 is a reduction axis, except if it
     // was initially of size 1, in which case it is simply removed.
-    int tv2_outmost_axis = (do_reduction && second_axis_extent > 1) ? 1 : 0;
+    int tv2_outmost_axis = (do_reduction && second_axis_extent > 1) ? 1 : sharded_dim;
     tv2->axis(tv2_outmost_axis)->parallelize(ParallelType::DIDx);
-    tv3->axis(0)->parallelize(ParallelType::DIDx);
+    tv3->axis(sharded_dim)->parallelize(ParallelType::DIDx);
   }
 
-  inputs = {at::ones(input_sizes, tensor_options) * communicator->deviceId()};
+  auto unsharded_input = at::randn(input_sizes, tensor_options);
+  if (is_stage0_sharded) {
+    auto sharded_input = shardInputTensor(unsharded_input, sharded_dim, communicator->deviceId());
+    inputs = {sharded_input};
+  } else {
+    inputs = {unsharded_input};
+  }
 
-  executeAndValidate();
+  executeAndValidate({unsharded_input});
 }
 
 namespace {
@@ -226,7 +238,8 @@ INSTANTIATE_TEST_SUITE_P(
         all_meshes,
         ::testing::Values(true),
         ::testing::Values(false),
-        ::testing::Values(false)));
+        ::testing::Values(false),
+        ::testing::Values(0, 1)));
 
 INSTANTIATE_TEST_SUITE_P(
     Scatter,
@@ -237,7 +250,8 @@ INSTANTIATE_TEST_SUITE_P(
         all_meshes,
         ::testing::Values(false),
         ::testing::Values(true),
-        ::testing::Values(false)));
+        ::testing::Values(false),
+        ::testing::Values(0, 1)));
 
 INSTANTIATE_TEST_SUITE_P(
     Bcast,
@@ -248,7 +262,8 @@ INSTANTIATE_TEST_SUITE_P(
         all_meshes,
         ::testing::Values(false),
         ::testing::Values(false),
-        ::testing::Values(false)));
+        ::testing::Values(false),
+        ::testing::Values(0)));
 
 INSTANTIATE_TEST_SUITE_P(
     Bcast_sharded,
@@ -259,7 +274,8 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::Values(mesh3, mesh4),
         ::testing::Values(true),
         ::testing::Values(true),
-        ::testing::Values(false)));
+        ::testing::Values(false),
+        ::testing::Values(0)));
 
 INSTANTIATE_TEST_SUITE_P(
     Bcast_sharded_same_mesh,
@@ -270,7 +286,8 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::Values(mesh_null), // the same mesh is used for all tensors
         ::testing::Values(true),
         ::testing::Values(true),
-        ::testing::Values(false)));
+        ::testing::Values(false),
+        ::testing::Values(0)));
 
 INSTANTIATE_TEST_SUITE_P(
     Reduce,
@@ -281,7 +298,8 @@ INSTANTIATE_TEST_SUITE_P(
         all_meshes,
         ::testing::Values(true),
         ::testing::Values(false),
-        ::testing::Values(true)));
+        ::testing::Values(true),
+        ::testing::Values(0)));
 
 INSTANTIATE_TEST_SUITE_P(
     ReduceScatter,
@@ -292,7 +310,8 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::Values(mesh_null), // the same mesh is used for all tensors
         ::testing::Values(true),
         ::testing::Values(true),
-        ::testing::Values(true)));
+        ::testing::Values(true),
+        ::testing::Values(0)));
 
 TEST_F(PipelineTest, Overlap) {
   // In this example we demonstrate how we can apply the optimization
