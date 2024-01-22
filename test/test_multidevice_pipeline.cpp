@@ -498,8 +498,6 @@ TEST_F(PipelineTest, matmul_summa) {
 // Inputs: X[N,K], A^T[M, K], B[M,0]
 // Compute: Y = Matmul(X, A), Z = Matmul(Y, B)
 // sharding: A, B are row-wise sharded (M)
-// TODO: Temporary hack of adding a zero bias so that global output buffer
-// is properly allocated.
 TEST_F(PipelineTest, matmuls_megatron_mlp) {
   std::unique_ptr<Fusion> fusion = std::make_unique<Fusion>();
   FusionGuard fg(fusion.get());
@@ -516,7 +514,6 @@ TEST_F(PipelineTest, matmuls_megatron_mlp) {
   TensorView* tvx = makeConcreteTensor({N, K}); // (N,K)
   TensorView* tva = makeConcreteTensor({M, K}); // (M,K) 
   TensorView* tvb = makeConcreteTensor({M, O}); // (M,O)
-  TensorView* bias = makeConcreteTensor({N, O}); 
 
   // Matmul 1: tvx x tva -> y (N,M)
   TensorView* tvx_b = broadcast(tvx, {true, false, false}); // (M,N,K)
@@ -524,54 +521,28 @@ TEST_F(PipelineTest, matmuls_megatron_mlp) {
   TensorView* tvxa = mul(tvx_b, tva_b); // (M,N,K)
   TensorView* tvy = sum(tvxa, {2}); // (M,N) yT
 
-    // Matmul 2: y^T (M, N) x tvb (M, O) -> z (N,O)
+  // Matmul 2: y^T (M, N) x tvb (M, O) -> z (N,O)
   TensorView* tvy_b = broadcast(tvy, {false, false, true}); // (M,N,O)
   TensorView* tvb_b = broadcast(tvb, {false, true, false}); // (M,N,O)
   TensorView* tvyb = mul(tvy_b, tvb_b); // (M,N,O)
   TensorView* tvz = sum(tvyb, {0}); // (N,O)
-  TensorView* tvz_ = add(tvz, bias);
 
-  // Matmul 1 sharding: Dimension M sharded
-  // X not sharded
-  // A sharded along M 
-  // tva->split(0, num_devices, false); // (D,M//D,K)
-  tva->axis(0)->parallelize(ParallelType::DIDx); 
-
-  // Intermediates tvx_b, tva_b, tvxa sharded along M
+  // Tensor sharded along the M axis. All other tensors are replicated.
   // TODO: propogate sharding from inputs
-  // tvx_b->split(0, num_devices, false); // (D,M//D,N,K)
-  tvx_b->axis(0)->parallelize(ParallelType::DIDx);
-  // tva_b->split(0, num_devices, false); // (D,M//D,N,K)
-  tva_b->axis(0)->parallelize(ParallelType::DIDx);
-  // tvxa->split(0, num_devices, false); // (D,M//D,N,K)
-  tvxa->axis(0)->parallelize(ParallelType::DIDx);
-  
-  // Y's sharding
-  // tvy->split(0, num_devices, false); // (D,M//D, N)
-  tvy->axis(0)->parallelize(ParallelType::DIDx); 
-
-  // B row-wise sharded
-  // tvb->split(0, num_devices, false); // (D,M//D,O)
-  tvb->axis(0)->parallelize(ParallelType::DIDx); 
-
-  // intermediates sharded along M
-  // tvy_b->split(0, num_devices, false); // (D,M//D,N,O)
-  tvy_b->axis(0)->parallelize(ParallelType::DIDx);
-  // tvb_b->split(0, num_devices, false); // (D,M//D,N,O)
-  tvb_b->axis(0)->parallelize(ParallelType::DIDx);
-  // tvyb->split(0, num_devices, false); // (D,M//D,N,O)
-  tvyb->axis(0)->parallelize(ParallelType::DIDx);
+  auto sharded_tvs = {tva, tvx_b, tva_b, tvxa, tvy, tvb, tvy_b, tvb_b, tvyb};
+  for (auto tv : sharded_tvs) {
+    //tensor->split(0, num_devices, false); // split outer-dimension by D
+    tv->axis(0)->parallelize(ParallelType::DIDx);
+  }
 
   fusion->addInput(tvx);
   fusion->addInput(tva);
   fusion->addInput(tvb);
-  fusion->addInput(bias);
   fusion->addOutput(tvy);
-  // fusion->addOutput(tvz);
-  fusion->addOutput(tvz_);
+  fusion->addOutput(tvz);
 
   std::vector<TensorView*> tvs = {tvx, tva, tvb, tvx_b, tva_b, tvxa, tvy,
-    tvy_b, tvb_b, tvyb, tvz, tvz_, bias};
+    tvy_b, tvb_b, tvyb, tvz, };
   for (auto tv : tvs) {
     tv->setDeviceMesh(mesh);
   }
@@ -579,10 +550,9 @@ TEST_F(PipelineTest, matmuls_megatron_mlp) {
   auto x = at::randn({N, K}, tensor_options);
   auto aT = at::randn({M, K}, tensor_options);
   auto b = at::randn({M, O}, tensor_options);
-  auto zero = at::zeros({N, O}, tensor_options);
   auto myDevice = communicator->deviceId();
   inputs = {x, shardInputTensor(aT, mesh, myDevice),
-    shardInputTensor(b, mesh, myDevice), zero};
+            shardInputTensor(b, mesh, myDevice)};
   auto y = at::matmul(x, aT.transpose(0,1));
   auto z = at::matmul(y, b);
   auto expected_outputs = {shardInputTensor(y.transpose(0,1), mesh, myDevice), z};
@@ -593,8 +563,6 @@ TEST_F(PipelineTest, matmuls_megatron_mlp) {
         runtime.fusion(), outputs, inputs, expected_outputs, __LINE__, __FILE__);
 }
 
-// TODO: Temporary hack of adding a zero bias so that global output buffer
-// is properly allocated.
 TEST_F(PipelineTest, matmul_megatron_attention) {
   FusionGuard fg(fusion.get());
   int num_devices = communicator->size();
@@ -612,8 +580,7 @@ TEST_F(PipelineTest, matmul_megatron_attention) {
   TensorView* k = makeConcreteTensor({H, S, Dk}); //64
   TensorView* v = makeConcreteTensor({H, S, Dv});  //64
   TensorView* w = makeConcreteTensor({H, Dv, D_model}); //40
-  TensorView* bias = makeConcreteTensor({S, D_model});//40
-  auto tv_inputs = {q, k, v, w, bias};
+  auto tv_inputs = {q, k, v, w};
   for (auto i : tv_inputs) {
     fusion->addInput(i);
   }
@@ -634,8 +601,7 @@ TEST_F(PipelineTest, matmul_megatron_attention) {
   TensorView* w_b = broadcast(w, {false, true, false, false}); // (H, S, Dv, Dmodel)
   TensorView* y0 = mul(qkv_b, w_b); 
   TensorView* y1 = sum(y0, {0}); // (S, Dv, Dmodel) // TODO: Reduce Dv first
-  TensorView* y2 = sum(y1, {1}); // (S, Dmodel)
-  TensorView* y = add(y2, bias);
+  TensorView* y = sum(y1, {1}); // (S, Dmodel)
   fusion->addOutput(qk);
   fusion->addOutput(qkv);
   fusion->addOutput(y);
@@ -648,7 +614,7 @@ TEST_F(PipelineTest, matmul_megatron_attention) {
   }
 
   // All other tensorviews that are not sharded
-  std::vector<TensorView*> tvs = {y1, y2, y, bias};
+  std::vector<TensorView*> tvs = {y1, y};
   for (auto tv : tvs) {
     tv->setDeviceMesh(mesh);
   }
@@ -657,13 +623,11 @@ TEST_F(PipelineTest, matmul_megatron_attention) {
   auto aten_k = at::randn({H, S, Dk}, tensor_options);
   auto aten_v = at::randn({H, S, Dv}, tensor_options);
   auto aten_w = at::randn({H, Dv, D_model}, tensor_options);
-  auto zero = at::zeros({S, D_model}, tensor_options);
   auto deviceId = communicator->deviceId();
   inputs = {shardInputTensor(aten_q, mesh, deviceId),
             shardInputTensor(aten_k, mesh, deviceId),
             shardInputTensor(aten_v, mesh, deviceId),
-            shardInputTensor(aten_w, mesh, deviceId),
-            zero};
+            shardInputTensor(aten_w, mesh, deviceId)};
   auto aten_qk = at::matmul(aten_q, aten_k.permute({0, 2, 1})); // H, S, Dk x H, Dk, S -> H, S, S
   auto aten_qkv = at::matmul(aten_qk, aten_v); // H, S, S x H, S, Dv -> H, S, Dv
   auto aten_qkv_concat = aten_qkv.permute({1, 0, 2}).flatten(1, 2); // S, H*Dv 
