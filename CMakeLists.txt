@@ -26,7 +26,7 @@ endif()
 string(APPEND CMAKE_CXX_FLAGS " -Wno-psabi")
 
 find_package(Torch REQUIRED)
-find_package(Python REQUIRED Development Interpreter)
+find_package(Python REQUIRED Development.Module Interpreter)
 find_package(pybind11 REQUIRED)
 
 # need this since the pytorch execution uses a different name
@@ -456,7 +456,7 @@ if(BUILD_TEST)
     ${NVFUSER_ROOT}/test/multidevice.cpp
     ${NVFUSER_ROOT}/test/test_multidevice_pipeline.cpp
     ${NVFUSER_ROOT}/test/test_multidevice_communications.cpp
-    ${NVFUSER_ROOT}/test/test_multidevice_ir.cpp
+    ${NVFUSER_ROOT}/test/test_multidevice_sharding.cpp
   )
   add_test(test_multidevice "${MULTIDEVICE_TEST_SRCS}" "")
   list(APPEND TEST_BINARIES test_multidevice)
@@ -467,6 +467,7 @@ if(BUILD_TEST)
   set(MATMUL_TEST_SRCS)
   list(APPEND MATMUL_TEST_SRCS
     ${NVFUSER_ROOT}/test/test_mma.cpp
+    ${NVFUSER_ROOT}/test/test_combine_mul_sum.cpp
     ${NVFUSER_ROOT}/test/test_matmul_sass.cpp
     ${NVFUSER_ROOT}/test/test_matmul_scheduler.cpp
     ${NVFUSER_ROOT}/test/test_gpu_tensorcore.cpp

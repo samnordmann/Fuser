@@ -521,10 +521,6 @@ std::vector<int64_t> getContiguousStrides(
 
 // Infer the size and stride of each dimension
 std::pair<std::vector<int64_t>, std::vector<int64_t>> inferShape(
-    // interesting. I think it can be used as-is.
-    // What to do with the strides ? Maybe we should assert (or Warn) that the
-    // strides are 0 From the implementation of how to get the strides, I think
-    // it's not a problem
     const TensorView* tv,
     std::vector<Val*> symbolic_sizes,
     std::vector<bool> expand_flags,
@@ -845,14 +841,10 @@ class BackwardTraverseFromAllocToRFactor {
 // For example, if the rFactor domain is [I1, I2], and the allocation domain is
 // [I2*I1], then we will allocate as [I2*I1], then do a tensor.view(I2, I1).t()
 // to get a tensor whose semantics is [I1, I2] but its memory is [I2*I1].
-// interesting Another example, if the rFactor domain is [I1*I2] and the
-// allocation domain is [I1, I2], then we will allocate as [I1, I2] and do a
-// tensor.view(I1*I2) to get a tensor whose semantics is [I1*I2] but memory is
-// [I1,I2]
-at::Tensor transformOutputFromAllocationToRFactor( // maybe it is brutal to
-                                                   // completely discard a Did
-                                                   // axis. In case of a
-                                                   // reduction?
+// Another example, if the rFactor domain is [I1*I2] and the allocation domain
+// is [I1, I2], then we will allocate as [I1, I2] and do a tensor.view(I1*I2) to
+// get a tensor whose semantics is [I1*I2] but memory is [I1,I2]
+at::Tensor transformOutputFromAllocationToRFactor(
     at::Tensor tensor,
     TensorView* tv,
     ExpressionEvaluator& ee) {
@@ -1545,8 +1537,7 @@ void FusionExecutor::initializeExecutorEntry(
   // All information is gathered. Save it to ExecutorEntry
   executor_entry.launch_params = launch_params;
   executor_entry.outputs = output_info;
-  executor_entry.intermediates =
-      intermediates; // this where is initialized what we want
+  executor_entry.intermediates = intermediates; // this where is initialized what we want
   executor_entry.init = true;
 }
 
@@ -1666,6 +1657,7 @@ std::vector<at::Tensor> FusionExecutor::runFusion(
     dumpFusionArgs(
         fusion_id_, args, launch_constraints, compile_params, outputs);
   }
+
   c10::DeviceGuard dg(options_.device);
   auto stream = at::cuda::getCurrentCUDAStream();
   at::cuda::jit::initializeCudaContext();
@@ -2195,6 +2187,7 @@ flatbuffers::Offset<serde::GlobalBufferInfo> FusionExecutor::serialize(
 void FusionExecutor::deserialize(
     const serde::FusionExecutor* buffer,
     Fusion* fusion,
+    int8_t device_index,
     CompileParams compile_params,
     ScheduleHeuristic heuristic,
     int64_t fusion_id,
@@ -2217,6 +2210,10 @@ void FusionExecutor::deserialize(
       group_id == buffer->group_id(),
       "Expected given group_id to match serde group_id.");
   NVF_ERROR(toUnderlying(heuristic) == buffer->heuristic());
+
+  // Initialize CompileOptions
+  options_.device = c10::Device(c10::DeviceType::CUDA, device_index);
+  c10::DeviceGuard dg(options_.device);
 
   // Initialize internal fields
   device_smem_limit_ = buffer->device_smem_limit();

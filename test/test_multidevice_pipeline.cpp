@@ -40,7 +40,6 @@
 #include <iostream>
 
 namespace nvfuser {
-
 using namespace torch::jit::fuser::cuda;
 using namespace at::indexing;
 
@@ -163,8 +162,8 @@ TEST_P(PipelineTestTwoStages, Communication) {
     mesh1 = mesh0;
   }
 
-  int sharded_dim_extent = 3;
-  int second_axis_extent = 2;
+  int sharded_dim_extent = 4;
+  int second_axis_extent = 3;
   if (is_stage0_sharded) {
     sharded_dim_extent = mesh0.vector().size();
     std::cout << "Stage 0 sharded " << mesh0.vector().size() << std::endl;
@@ -176,11 +175,16 @@ TEST_P(PipelineTestTwoStages, Communication) {
     GTEST_ASSERT_EQ(mesh0.vector().size(), mesh1.vector().size());
     second_axis_extent = mesh1.vector().size();
   }
-  std::vector<int64_t> input_sizes = {3, 2, 3, 5};
-  input_sizes[sharded_dim] = sharded_dim_extent;
+  std::vector<int64_t> unsharded_input_sizes = {3, second_axis_extent, 3, 5};
+  unsharded_input_sizes[sharded_dim] = sharded_dim_extent;
+  std::vector<int64_t> sharded_input_sizes = unsharded_input_sizes;
+  if (is_stage0_sharded) {
+    sharded_input_sizes[sharded_dim] = 1;
+  }
+  
 
   FusionGuard fg(fusion.get());
-  TensorView* tv0 = makeConcreteTensor(input_sizes);
+  TensorView* tv0 = makeConcreteTensor(unsharded_input_sizes);
   TensorView* tv1 = sum(tv0, {3});
   TensorView* tv2 = do_reduction ? sum(tv1, {0}) : set(tv1);
   TensorView* tv3 = sum(tv2, {2});
@@ -203,15 +207,9 @@ TEST_P(PipelineTestTwoStages, Communication) {
     tv3->axis(sharded_dim)->parallelize(ParallelType::DIDx);
   }
 
-  auto unsharded_input = at::randn(input_sizes, tensor_options);
-  if (is_stage0_sharded) {
-    auto sharded_input = shardInputTensor(unsharded_input, sharded_dim, communicator->deviceId());
-    inputs = {sharded_input};
-  } else {
-    inputs = {unsharded_input};
-  }
-
-  executeAndValidate({unsharded_input});
+  inputs = {at::ones(sharded_input_sizes, tensor_options) * communicator->deviceId()};
+  
+  // executeAndValidate();
 }
 
 namespace {

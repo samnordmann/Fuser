@@ -133,7 +133,6 @@ void Communication::setParams(CommParams params) {
 }
 
 void Communication::validateParams() {
-  std::cout << toString() << std::endl;
   assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
   NVF_ERROR(
       std::unique(params_.team.begin(), params_.team.end()) ==
@@ -231,7 +230,6 @@ Broadcast::Broadcast(CommParams params) : Communication(params, "broadcast") {}
 Broadcast::Broadcast(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
             DeviceIdxType my_device_index, DeviceIdxType root) 
             : Communication("broadcast") {
-  std::cout << "Broadcast" << std::endl;
   CommParams params;
   params.root = root;
   auto mesh = output_tv->getDeviceMesh();
@@ -296,9 +294,7 @@ Gather::Gather(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at
   if (requiresRelayoutOutputTensor(input_tv, output_tv)) {
     output_ = output;
     output = allocateOutputTensor(input_tv, output);
-    std::cout << "Gather output sizes FINAL " << output_.sizes() << std::endl;
   }
-  std::cout << "Gather output sizes " << output.sizes() << std::endl;
 
   std::vector<int64_t> slice_shape = {1}; // Device dim axis length = 1
   for (auto i = 1; i < output.dim(); i++) {
@@ -307,7 +303,6 @@ Gather::Gather(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at
 
   if (mesh.has(my_device_index)) {
     params.src_bufs = {input.view(slice_shape)};
-    std::cout << "Gather input " << params.src_bufs[0].sizes() << std::endl;
   }
 
 
@@ -317,7 +312,6 @@ Gather::Gather(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at
       // Pushed the sharded dimension forward.
       indices[0] = at::indexing::Slice(i, i+1);
       auto x = output.index(indices).view(slice_shape);
-      std::cout << "Gather output slice sizes " << i << " " << x.sizes() << std::endl;
       params.dst_bufs.push_back(x);
     }
     // The gather semantics imposes the root to be both
@@ -328,7 +322,6 @@ Gather::Gather(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at
       at::Tensor dummy = at::empty(slice_shape, output.options());
       params.src_bufs.push_back(dummy);
       params.dst_bufs.push_back(dummy);
-      std::cout << "Gather dummy sizes " << dummy.sizes() << std::endl;
     }
   }
 
@@ -375,14 +368,10 @@ Allgather::Allgather(TensorView* input_tv, TensorView* output_tv,
   // allgather writes to output tensor with the device sharded axes pushed
   // to the outermost axes for contiguity. 
   // See csrc/multidevice/executor.cpp handle(PipelineCommunication)
-  std::cout << "Allgather" << std::endl;
-  std::cout << input_tv->toString() << std::endl;
   if (requiresRelayoutOutputTensor(input_tv, output_tv)) {
     output_ = output;
     output = allocateOutputTensor(input_tv, output);
-    std::cout << "AG output sizes FINAL " << output_.sizes() << std::endl;
   }
-  std::cout << "AG output sizes " << output.sizes() << std::endl;
 
   // Calculate shape of a shard - TODO: make this a utility function.
   std::vector<int64_t> slice_shape = {1}; // Device dim axis length = 1
@@ -398,10 +387,8 @@ Allgather::Allgather(TensorView* input_tv, TensorView* output_tv,
     indices[0] = at::indexing::Slice(i, i+1);
     params.dst_bufs.push_back(
       output.index(indices).view(slice_shape));
-    std::cout << "AG Output slice " << params.dst_bufs[0].sizes() << std::endl;
   }
   params.src_bufs = {input.view(slice_shape)};
-  std::cout << "AG Input tensor " << params.src_bufs[0].sizes() << std::endl;
 
   setParams(params);
 
@@ -444,17 +431,14 @@ Scatter::Scatter(TensorView* input_tv, TensorView* output_tv, at::Tensor input, 
 
   if (mesh.has(my_device_index)) {
     params.dst_bufs = {output};
-    std::cout << "Scatter output size " << output.sizes() << std::endl;
   }
 
   int sharded_dim = dimWithParallelType(output_tv, ParallelType::DIDx);
   if (my_device_index == root) {
-    std::cout << "Scatter input size total " << input.sizes() << std::endl;
     for (auto i : c10::irange(mesh.vector().size())) {
       std::vector<at::indexing::TensorIndex> indices(input.dim(), at::indexing::Slice());
       indices[sharded_dim] = at::indexing::Slice(i, i+1);
       auto x = input.index(indices).contiguous();
-      std::cout << "Scatter input size " << i << " " << x.sizes() << std::endl;
       params.src_bufs.push_back(x);
     }
     // The scatter semantics imposes the root to be both
@@ -468,7 +452,6 @@ Scatter::Scatter(TensorView* input_tv, TensorView* output_tv, at::Tensor input, 
       }
       slice_shape[sharded_dim] = 1;
       at::Tensor dummy = at::empty(slice_shape, input.options());
-      std::cout << "Scatter dummy sizes " << dummy.sizes() << std::endl;
       params.src_bufs.push_back(dummy);
       params.dst_bufs.push_back(dummy);
     }
@@ -623,7 +606,7 @@ ReduceScatter::ReduceScatter(TensorView* input_tv, TensorView* output_tv,
   for (auto i : c10::irange(mesh.vector().size())) {
     std::vector<at::indexing::TensorIndex> indices(input.dim(), at::indexing::Slice());
     indices[sharded_dim] = at::indexing::Slice(i, i+1);
-    auto x = input.index(indices).contiguous().view(output.sizes());
+    auto x = input.index(indices).contiguous().squeeze(sharded_dim);
     params.src_bufs.push_back(x);
   }
 
