@@ -46,6 +46,19 @@ class MultiDeviceEnvironment : public testing::Environment {
 };
 
 class MultiDeviceTest : public NVFuserTest {
+  public:
+    static at::Tensor shardInputTensor(at::Tensor tensor, int axis, DeviceMesh& mesh, int deviceId) {
+      int i = 0;
+      auto devices = mesh.vector();
+      auto it = find (devices.begin(), devices.end(), deviceId);
+      if (it != devices.end()) {
+        i = *it;
+      }
+      std::vector<at::indexing::TensorIndex> indices(tensor.dim(), at::indexing::Slice());
+      indices[axis] = at::indexing::Slice(i, i+1);
+      return tensor.index(indices).contiguous();
+    }
+    
  protected:
   void SetUp() override;
   void TearDown() override;
