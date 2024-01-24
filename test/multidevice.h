@@ -19,7 +19,6 @@ namespace nvfuser {
 class MultiDeviceEnvironment : public testing::Environment {
  public:
   void SetUp() override;
-  void TearDown() override;
 
   Communicator* communicator() const {
     NVF_ERROR(communicator_ != nullptr);
