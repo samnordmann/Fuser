@@ -42,9 +42,9 @@ copyFusionAndChangeOutputs(Fusion* fusion, std::unordered_set<Val*> outputs) {
 
   for (auto tv : ir_utils::filterByType<TensorView>(fusion_copy->vals())) {
     tv->setMemoryType(MemoryType::Global);
-    for (int i : c10::irange(tv->domain()->nDims())) {
-      if (!tv->axis(i)->isDeviceDim()) {
-        tv->axis(i)->parallelize(ParallelType::Serial);
+    for (auto i : c10::irange(tv->domain()->nDims())) {
+      if (!tv->axis(static_cast<int>(i))->isDeviceDim()) {
+        tv->axis(static_cast<int>(i))->parallelize(ParallelType::Serial);
       }
     }
   }
