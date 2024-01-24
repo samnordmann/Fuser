@@ -56,7 +56,9 @@ class DeviceMesh final {
         std::unique(vector_.begin(), vector_.end()) == vector_.end(),
         "device mesh has duplicates");
     tensor_ = at::from_blob(
-        vector_.data(), vector_.size(), at::TensorOptions().dtype(at::kInt));
+        vector_.data(),
+        static_cast<long>(vector_.size()),
+        at::TensorOptions().dtype(at::kInt));
   }
 
   // stores the list of device indices

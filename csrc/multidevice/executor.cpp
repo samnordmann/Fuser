@@ -42,7 +42,7 @@ copyFusionAndChangeOutputs(Fusion* fusion, std::unordered_set<Val*> outputs) {
 
   for (auto tv : ir_utils::filterByType<TensorView>(fusion_copy->vals())) {
     tv->setMemoryType(MemoryType::Global);
-    for (auto i : c10::irange(tv->domain()->nDims())) {
+    for (int i : c10::irange(tv->domain()->nDims())) {
       if (!tv->axis(i)->isDeviceDim()) {
         tv->axis(i)->parallelize(ParallelType::Serial);
       }
@@ -194,8 +194,9 @@ void MultiDeviceExecutor::postCommunication(SegmentedGroup* group) {
   // post and wait communications
   for (auto& communication : communications) {
     auto work = communication->post(comm_);
-    if (work)
+    if (work) {
       work->wait();
+    }
   }
 }
 
