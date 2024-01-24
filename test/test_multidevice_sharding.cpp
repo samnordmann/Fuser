@@ -18,10 +18,8 @@
 
 namespace nvfuser {
 
-class ShardingTest
-    : public MultiDeviceTest,
-      public ::testing::WithParamInterface<bool> {
-};
+class ShardingTest : public MultiDeviceTest,
+                     public ::testing::WithParamInterface<bool> {};
 
 TEST_P(ShardingTest, UnshardedGlobalInput) {
   auto concreteTV = GetParam();
@@ -34,7 +32,8 @@ TEST_P(ShardingTest, UnshardedGlobalInput) {
   DeviceMesh mesh(devices);
   std::vector<int64_t> input_size = {num_devices, 3};
 
-  TensorView* tv0 = concreteTV ? makeConcreteTensor(input_size) : makeContigTensor(2);
+  TensorView* tv0 =
+      concreteTV ? makeConcreteTensor(input_size) : makeContigTensor(2);
   TensorView* tv1 = add(tv0, tv0);
   TensorView* tv2 = set(tv1);
   TensorView* tv3 = add(tv2, tv2);
@@ -75,7 +74,8 @@ TEST_P(ShardingTest, ShardGlobalInput) {
   DeviceMesh mesh(devices);
   std::vector<int64_t> unsharded_input_size = {num_devices, 3, 2};
 
-  TensorView* tv0 = concreteTV ? makeConcreteTensor(unsharded_input_size) : makeContigTensor(2);
+  TensorView* tv0 = concreteTV ? makeConcreteTensor(unsharded_input_size)
+                               : makeContigTensor(2);
   TensorView* tv1 = set(tv0);
   TensorView* tv2 = add(tv1, tv1);
   fusion->addInput(tv0);
@@ -102,8 +102,7 @@ TEST_P(ShardingTest, ShardGlobalInput) {
 INSTANTIATE_TEST_SUITE_P(
     OutermostAxis,
     ShardingTest,
-    ::testing::Values(true, false)
-);
+    ::testing::Values(true, false));
 
 } // namespace nvfuser
 #endif

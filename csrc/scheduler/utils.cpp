@@ -296,9 +296,9 @@ void parallelizeAllLike(
 
   if (selected_tvs.empty()) {
     selected_tvs = ir_utils::allTvs(reference_tv->fusion());
-      }
+  }
   for (auto tv : selected_tvs) {
-if (tv->isFusionInput()) {
+    if (tv->isFusionInput()) {
       continue;
     }
     for (const auto i : c10::irange(tv->getLeafDomain().size())) {
