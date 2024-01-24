@@ -54,8 +54,8 @@ using namespace at::indexing;
 */
 
 TEST_F(PipelineTest, Pipeline) {
-  const std::vector<int64_t> input_shape1 = {6, 7};
-  const std::vector<int64_t> input_shape2 = {3, 5, 2};
+  const std::vector<int64_t> input_shape1 = {3096, 1123};
+  const std::vector<int64_t> input_shape2 = {2048, 73, 81};
   // ===========================================================
   //        FUSION
   // ===========================================================
@@ -476,7 +476,7 @@ TEST_F(PipelineTest, matmul_summa) {
   d->axis(3)->parallelize(ParallelType::DIDy);
   fusion->addOutput(d);
 
-  fusion->print();
+  // fusion->print();
 
   inputs = {
       at::randn(a_extents, tensor_options),
@@ -486,13 +486,13 @@ TEST_F(PipelineTest, matmul_summa) {
   fe.compileFusion(fusion.get(), inputs);
   auto ref_outputs = fe.runFusion(inputs);
 
-  std::cout << "a (concrete inputs): \n"
-            << inputs.at(0) << "\nb (concrete inputs): \n"
-            << inputs.at(1) << std::endl;
-  for (auto t : c10::irange(ref_outputs.size())) {
-    std::cout << "\noutput " << t << ":\n" << ref_outputs.at(t);
-  }
-  std::cout << std::endl;
+  // std::cout << "a (concrete inputs): \n"
+  //           << inputs.at(0) << "\nb (concrete inputs): \n"
+  //           << inputs.at(1) << std::endl;
+  // for (auto t : c10::irange(ref_outputs.size())) {
+  //   std::cout << "\noutput " << t << ":\n" << ref_outputs.at(t);
+  // }
+  // std::cout << std::endl;
 }
 
 // 1D tensor parallel
