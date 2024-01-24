@@ -20,6 +20,7 @@ namespace nvfuser {
 
 class ShardingTest
     : public MultiDeviceTest,
+      // parameters use concrete tensorview?, sharded dimension
       public ::testing::WithParamInterface<std::tuple<bool, int>> {
 };
 
@@ -40,8 +41,6 @@ TEST_P(ShardingTest, UnshardedGlobalInput) {
   TensorView* tv3 = add(tv2, tv2);
   TensorView* tv4 = set(tv3);
   TensorView* tv5 = sum(tv4, {0});
-  fusion->addInput(tv0);
-  fusion->addOutput(tv5);
 
   // TODO: split
   // tv2->split(sharded_dim, num_devices, false);
@@ -53,6 +52,9 @@ TEST_P(ShardingTest, UnshardedGlobalInput) {
   for (auto tv : tvs) {
     tv->setDeviceMesh(mesh);
   }
+
+  fusion->addInput(tv0);
+  fusion->addOutput(tv5);
 
   auto x = at::randn(input_size, tensor_options);
   std::vector<c10::IValue> inputs = {x};
@@ -75,7 +77,7 @@ TEST_P(ShardingTest, ShardGlobalInput) {
   std::vector<int64_t> unsharded_input_size = {5, 3, 2};
   unsharded_input_size[sharded_dim] = num_devices;
 
-  TensorView* tv0 = concreteTV ? makeConcreteTensor(unsharded_input_size) : makeContigTensor(2);
+  TensorView* tv0 = concreteTV ? makeConcreteTensor(unsharded_input_size) : makeContigTensor(3);
   TensorView* tv1 = set(tv0);
   TensorView* tv2 = add(tv1, tv1);
   fusion->addInput(tv0);
@@ -103,8 +105,8 @@ INSTANTIATE_TEST_SUITE_P(
     NonoutermostAxis,
     ShardingTest,
     ::testing::Combine(
-      ::testing::Values(true),
-      ::testing::Values(1))
+      ::testing::Values(true, false),
+      ::testing::Values(0))
 );
 
 

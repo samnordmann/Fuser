@@ -54,6 +54,7 @@
 #include <nvfuser_resources/type_traits.h>
 #include <nvfuser_resources/warp.h>
 #include <nvfuser_resources/welford.h>
+#include <multidevice/utils.h>
 
 #include <cstdlib>
 #include <fstream>
