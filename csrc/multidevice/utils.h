@@ -42,7 +42,4 @@ bool isContiguousShard(TensorView*);
 
 void unshard(Fusion*);
 void unshard(TensorView*);
-
-// returns the unsharded tensor size given sharded size and tv
-std::vector<int64_t> unshardedSizes(TensorView*, c10::IntArrayRef);
 } // namespace nvfuser

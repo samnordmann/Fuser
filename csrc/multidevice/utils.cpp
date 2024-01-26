@@ -159,16 +159,4 @@ std::set<DeviceIdxType> involvedDevices(Expr* expr) {
   return ret;
 }
 
-std::vector<int64_t> unshardedSizes(TensorView* tv, c10::IntArrayRef sharded_sizes) {
-  int sharded_axis = dimWithParallelType(tv, ParallelType::DIDx);
-  std::vector<int64_t> unsharded_sizes;
-    std::copy(sharded_sizes.begin(), sharded_sizes.end(), std::back_inserter(unsharded_sizes));
-  if (sharded_axis > -1) {
-    int num_devices = tv->getDeviceMesh().vector().size();
-    unsharded_sizes[sharded_axis] = num_devices;
-  }
-  return unsharded_sizes;
-}
-
-
 } // namespace nvfuser

@@ -14,7 +14,6 @@
 #include <ir/utils.h>
 #include <polymorphic_value.h>
 #include <tensor_metadata.h>
-#include <multidevice/utils.h>
 
 namespace nvfuser {
 
@@ -340,12 +339,7 @@ std::vector<PolymorphicValue> GetMetaData::evaluate(
   metadata->dtype =
       std::get<PrimDataType>(aten_to_data_type(input.scalar_type()).type);
   metadata->data = input.data_ptr();
-  if (isSharded(tv)) {
-    metadata->logical_size_data = unshardedSizes(tv, input.sizes());
-    metadata->logical_size = c10::makeArrayRef(metadata->logical_size_data);
-  } else {
-    metadata->logical_size = input.sizes();
-  }
+  metadata->logical_size = input.sizes();
   metadata->logical_stride = input.strides();
   if (tv->hasAllocation()) {
     auto allocation_data =
