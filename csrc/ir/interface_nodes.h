@@ -566,6 +566,13 @@ class TensorView : public Val {
 
   void clearComputeWith();
 
+  void gpuAt(unsigned int pos) {
+    gpu_at_pos_ = pos;
+    for (unsigned int i = 0; i < pos && i < domain()->leaf().size(); i++) {
+      domain()->leaf().at(i)->parallelize(ParallelType::CPU);
+    }
+  }
+
  private:
   TensorDomain* domain_ = nullptr;
   unsigned int compute_at_pos_ = 0;

@@ -668,7 +668,8 @@ enum class ParallelType {
   Mma,
   Group,
   Bulk,
-  Serial
+  Serial,
+  CPU
 };
 
 std::unordered_set<ParallelType> allParallelTypesExcept(
