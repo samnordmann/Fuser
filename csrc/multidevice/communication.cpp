@@ -61,7 +61,6 @@ inline c10d::ReduceOp::RedOpType getC10dReduceOpType(BinaryOpType op) {
   }
 }
 
-
 inline void assertBufferCount(
     const std::vector<at::Tensor>& bufs,
     size_t count) {
@@ -114,6 +113,31 @@ inline at::Tensor createDummyTensor(
   return createDummyTensor(reference).fill_(getInitialValue<float>(op_type));
 }
 
+// Returns the permutation order for a tensor with device
+// dimensions pushed to the front.
+std::vector<int64_t> permuteOrder(TensorView* tv) {
+  std::vector<int64_t> permute_order;
+  auto ids = TensorDomain::noReductions(tv->getMaybeRFactorDomain());
+  int sharded_axis = dimWithParallelType(tv, ParallelType::DIDx);
+  if (sharded_axis != -1) {
+    permute_order.push_back(sharded_axis);
+  }
+  for (size_t i = 0; i < ids.size(); i++) {
+    if (ids[i]->getParallelType() != ParallelType::DIDx) {
+      permute_order.push_back(int64_t(i));
+    }
+  }
+  return permute_order;
+}
+
+// Returns permutation order to undo permuteOrder.
+std::vector<int64_t> unpermuteOrder(std::vector<int64_t>& permute_order) {
+  std::vector<int64_t> unpremute_order(permute_order.size());
+  for (size_t i = 0; i < permute_order.size(); i++) {
+    unpremute_order[permute_order[i]] = i;
+  }
+  return unpremute_order;
+}
 } // namespace
 
 Communication::Communication(std::string name, bool has_root) :
@@ -123,14 +147,7 @@ Communication::Communication(std::string name, bool has_root) :
 Communication::Communication(CommParams params, std::string name, bool has_root)
     : params_(std::move(params)),
       collective_type_(std::move(name)),
-      has_root_(has_root) {
-  validateParams();
-}
-
-void Communication::setParams(CommParams params) {
-  params_ = std::move(params);  
-  validateParams();
-}
+      has_root_(has_root) {}
 
 void Communication::validateParams() {
   assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
@@ -179,72 +196,48 @@ std::string Communication::toString(int indent) const {
   return ss.str();
 }
 
-// Allocates a contiguous intermediate tensor.
-// Required for NCCL/UCC which expect contiguous input/output buffers.
 at::Tensor Communication::allocateOutputTensor(TensorView* tv, at::Tensor& tensor) {
-  // input tensor was sharded like [a b .. DIDx ... c d] where DIDx is the axis parallelized on DIDx (input_sharded_dim)
-  // the output tensor elements will be ordered as [DIDx a b c d] with device dimensions pushed to the outer most axis
-  // TODO: for tensor sharded over multiple dimensions it will be [DIDx DIDy DIDz ...]
-  // TODO: should probably do this analysis on the tensorview's shape
-  int input_sharded_dim = dimWithParallelType(tv, ParallelType::DIDx);
-  auto shape = tensor.sizes();
-  std::vector<int64_t> written_shape;
-  written_shape.push_back(shape[input_sharded_dim]);
-  int permute_offset = 1;
-  for (int i = 0; i < tensor.dim(); i++) {
-    if (i == input_sharded_dim) {
-      output_permute_order_.push_back(0);
-      permute_offset--;
-    } else {
-      written_shape.push_back(shape[i]);
-      output_permute_order_.push_back(i + permute_offset);
-    }
+  auto original_shape = tensor.sizes();
+  auto permute_order = permuteOrder(tv);
+  unpermute_order_ = unpermuteOrder(permute_order);
+  std::vector<int64_t> new_shape;
+  for (auto i : permute_order) {
+    new_shape.push_back(original_shape[i]);
   }
-  contig_output_tensor_ = at::randn(written_shape, tensor.options());
-  return contig_output_tensor_;
+  contig_output_ = at::empty(new_shape, tensor.options());
+  return contig_output_;
 }
 
 bool Communication::requiresRelayoutOutputTensor(TensorView* input_tv, TensorView* output_tv) {
-  // TODO: I think this is not completely correct.
   return !isContiguousShard(input_tv) && isContiguousShard(output_tv);
 }
 
 void Communication::relayoutOutputTensor() {
-  // Permute the axis into the correct order and copy into output_tensor.
-  if (output_permute_order_.size() > 0) {
-    output_.copy_(contig_output_tensor_.permute(output_permute_order_));
+  // Permute the axis into the correct order and copy into the destination buffer.
+  if (output_.numel() > 0) {
+    output_.copy_(contig_output_.permute(unpermute_order_));
   }
 }
-
-// Allocates a contiguous intermediate tensor shard.
-// Required for NCCL/UCC which expect contiguous input/output buffers.
-// at::Tensor Communication::contiguousTempTensorShard(TensorView* tv, at::Tensor& tensor, int64_t offset) {
-//   int input_sharded_dim = dimWithParallelType(static_cast<TensorView*>(tv), ParallelType::DIDx);
-//   std::vector<at::indexing::TensorIndex> indices(tensor.dim(), at::indexing::Slice());
-//   indices[sharded_dim] = at::indexing::Slice(offset, offset+1);
-//   return tensor.index(indices).contiguous();
-// }
 
 Broadcast::Broadcast(CommParams params) : Communication(params, "broadcast") {}
 
 Broadcast::Broadcast(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
             DeviceIdxType my_device_index, DeviceIdxType root) 
             : Communication("broadcast") {
-  CommParams params;
-  params.root = root;
+  params_.root = root;
   auto mesh = output_tv->getDeviceMesh();
-  params.team = mesh.vector();
+  params_.team = mesh.vector();
   if (!mesh.has(root)) {
-    params.team.push_back(root);
+    params_.team.push_back(root);
   }
 
   if (my_device_index == root) {
-    params.src_bufs = {input};
+    params_.src_bufs = {input};
   }
   if (mesh.has(my_device_index)) {
-    params.dst_bufs = {output};
+    params_.dst_bufs = {output};
   }
-  setParams(params);
+  validateParams();
 }
 
 c10::intrusive_ptr<c10d::Work> Broadcast::post(
@@ -275,59 +268,55 @@ c10::intrusive_ptr<c10d::Work> Broadcast::post(
 }
 
 Gather::Gather(CommParams params) : Communication(params, "gather") {
-  assertBufferCount(params_.src_bufs, 1);
-  NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
+  validateParams();
 }
 
 Gather::Gather(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
                  DeviceIdxType my_device_index, DeviceIdxType root) :
     Communication("gather") {
-  CommParams params;
-  params.root = root;
+  params_.root = root;
   DeviceMesh mesh = input_tv->getDeviceMesh();
-  params.team = mesh.vector();
+  params_.team = mesh.vector();
   bool is_root_in_mesh = mesh.has(root);
   if (!is_root_in_mesh) {
-    params.team.push_back(root);
+    params_.team.push_back(root);
   }
 
-  if (requiresRelayoutOutputTensor(input_tv, output_tv)) {
+  if (my_device_index == root && requiresRelayoutOutputTensor(input_tv, output_tv)) {
     output_ = output;
     output = allocateOutputTensor(input_tv, output);
   }
 
-  std::vector<int64_t> slice_shape = {1}; // Device dim axis length = 1
-  for (auto i = 1; i < output.dim(); i++) {
-    slice_shape.push_back(output.size(i));
+  if (requiresRelayoutOutputTensor(input_tv, output_tv) && mesh.has(my_device_index)) {
+    // Permute the device axis to the front.
+    // Input tensors are not copied since the device axis are size 1.
+    params_.src_bufs = {input.permute(permuteOrder(input_tv))};
+  } else if (mesh.has(my_device_index)) {
+    params_.src_bufs = {input};
   }
-
-  if (mesh.has(my_device_index)) {
-    params.src_bufs = {input.view(slice_shape)};
-  }
-
 
   if (my_device_index == root) {
     for (auto i : c10::irange(mesh.vector().size())) {
       std::vector<at::indexing::TensorIndex> indices(output.dim(), at::indexing::Slice());
       // Pushed the sharded dimension forward.
       indices[0] = at::indexing::Slice(i, i+1);
-      auto x = output.index(indices).view(slice_shape);
-      params.dst_bufs.push_back(x);
+      params_.dst_bufs.push_back(output.index(indices));
     }
-    // The gather semantics imposes the root to be both
-    // sender and receiver. If the root is not in the mesh, we thus
+    // The gather semantics imposes the root has to be in receiver mesh
+    // If the root is not in the mesh, we thus
     // have to artificially make it send and receive a dummy buffer
     // Since it is an "inplace" operation, this should not cause any overhead
     if (!is_root_in_mesh) {
-      at::Tensor dummy = at::empty(slice_shape, output.options());
-      params.src_bufs.push_back(dummy);
-      params.dst_bufs.push_back(dummy);
+      at::Tensor dummy = createDummyTensor(params_.dst_bufs[0]);
+      params_.src_bufs.push_back(dummy);
+      params_.dst_bufs.push_back(dummy);
     }
   }
+  validateParams();
+}
 
-  setParams(params);
-
-  // Check parameters are ok
+void Gather::validateParams() {
+  Communication::validateParams();
   assertBufferCount(params_.src_bufs, 1);
   NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
 }
@@ -357,42 +346,33 @@ c10::intrusive_ptr<c10d::Work> Gather::post(
 
 Allgather::Allgather(CommParams params)
     : Communication(params, "allgather", false) {
-  assertBufferCount(params_.src_bufs, 1);
-  assertBufferCount(params_.dst_bufs, params_.team.size());
-  NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
+  validateParams();
 }
 
 Allgather::Allgather(TensorView* input_tv, TensorView* output_tv, 
                      at::Tensor input, at::Tensor output) :
     Communication("allgather", false) {
-  // allgather writes to output tensor with the device sharded axes pushed
-  // to the outermost axes for contiguity. 
-  // See csrc/multidevice/executor.cpp handle(PipelineCommunication)
+  auto mesh = input_tv->getDeviceMesh();
+  params_.team = mesh.vector();
+
   if (requiresRelayoutOutputTensor(input_tv, output_tv)) {
     output_ = output;
     output = allocateOutputTensor(input_tv, output);
   }
 
-  // Calculate shape of a shard - TODO: make this a utility function.
-  std::vector<int64_t> slice_shape = {1}; // Device dim axis length = 1
-  for (auto i = 1; i < output.dim(); i++) {
-    slice_shape.push_back(output.size(i));
-  }
-
-  CommParams params;
-  auto mesh = input_tv->getDeviceMesh();
-  params.team = mesh.vector();
   for (auto i : c10::irange(mesh.vector().size())) {
     std::vector<at::indexing::TensorIndex> indices(output.dim(), at::indexing::Slice());
     indices[0] = at::indexing::Slice(i, i+1);
-    params.dst_bufs.push_back(
-      output.index(indices).view(slice_shape));
+    params_.dst_bufs.push_back(output.index(indices));
   }
-  params.src_bufs = {input.view(slice_shape)};
+  // If output axes were permuted, view the input in the same shape.
+  // Only device dimensions are moved so allocation is unaffected.
+  params_.src_bufs = {input.view(params_.dst_bufs[0].sizes())};
+  validateParams();
+}
 
-  setParams(params);
-
-  // Check parameters are ok
+void Allgather::validateParams() {
+  Communication::validateParams();
   assertBufferCount(params_.src_bufs, 1);
   assertBufferCount(params_.dst_bufs, params_.team.size());
   NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
@@ -413,24 +393,21 @@ c10::intrusive_ptr<c10d::Work> Allgather::post(
 }
 
 Scatter::Scatter(CommParams params) : Communication(params, "scatter") {
-  assertBufferCount(params_.dst_bufs, 1);
-  NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
+  validateParams();
 }
 
 Scatter::Scatter(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
-                 DeviceIdxType my_device_index, DeviceIdxType root) :
-    Communication("scatter") {
-  CommParams params;
-  params.root = root;
+                 DeviceIdxType my_device_index, DeviceIdxType root) : Communication("scatter") {
+  params_.root = root;
   DeviceMesh mesh = output_tv->getDeviceMesh();
-  params.team = mesh.vector();
+  params_.team = mesh.vector();
   bool is_root_in_mesh = mesh.has(root);
   if (!is_root_in_mesh) {
-    params.team.push_back(root);
+    params_.team.push_back(root);
   }
 
   if (mesh.has(my_device_index)) {
-    params.dst_bufs = {output};
+    params_.dst_bufs = {output};
   }
 
   int sharded_dim = dimWithParallelType(output_tv, ParallelType::DIDx);
@@ -439,26 +416,23 @@ Scatter::Scatter(TensorView* input_tv, TensorView* output_tv, at::Tensor input, 
       std::vector<at::indexing::TensorIndex> indices(input.dim(), at::indexing::Slice());
       indices[sharded_dim] = at::indexing::Slice(i, i+1);
       auto x = input.index(indices).contiguous();
-      params.src_bufs.push_back(x);
+      params_.src_bufs.push_back(x);
     }
     // The scatter semantics imposes the root to be both
     // sender and receiver. If the root is not in the mesh, we thus
     // have to artificially make it send and receive a dummy buffer
     // Since it is an "inplace" operation, this should not cause any overhead
     if (!is_root_in_mesh) {
-      std::vector<int64_t> slice_shape = {};
-      for (auto i = 0; i < input.dim(); i++) {
-        slice_shape.push_back(input.size(i));
-      }
-      slice_shape[sharded_dim] = 1;
-      at::Tensor dummy = at::empty(slice_shape, input.options());
-      params.src_bufs.push_back(dummy);
-      params.dst_bufs.push_back(dummy);
+      at::Tensor dummy = createDummyTensor(params_.src_bufs[0]);
+      params_.src_bufs.push_back(dummy);
+      params_.dst_bufs.push_back(dummy);
     }
   }
+  validateParams();
+}
 
-  setParams(params);
-
+void Scatter::validateParams() {
+  Communication::validateParams();
   assertBufferCount(params_.dst_bufs, 1);
   NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
 }
@@ -487,41 +461,41 @@ c10::intrusive_ptr<c10d::Work> Scatter::post(
 }
 
 Reduce::Reduce(CommParams params) : Communication(params, "reduce") {
-  assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
-  assertBufferCount(params_.src_bufs, 1);
+  validateParams();
 }
 
 Reduce::Reduce(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
           BinaryOpType op_type, DeviceIdxType my_device_index, DeviceIdxType root) 
           : Communication("reduce") {
-  std::cout << "Reduce" << std::endl;
-  CommParams params;
-  params.root = root;
-  params.redOp = getC10dReduceOpType(op_type);
+  params_.root = root;
+  params_.redOp = getC10dReduceOpType(op_type);
   auto mesh = input_tv->getDeviceMesh();
-  params.team = mesh.vector();
+  params_.team = mesh.vector();
   bool is_root_in_mesh = mesh.has(root);
   if (!is_root_in_mesh) {
-    params.team.push_back(root);
+    params_.team.push_back(root);
   }
 
   int sharded_dim = dimWithParallelType(input_tv, ParallelType::DIDx);
   if (mesh.has(my_device_index)) {
-    params.src_bufs = {input.squeeze(sharded_dim)};
+    params_.src_bufs = {input.squeeze(sharded_dim)};
   }
 
   if (my_device_index == root) {
-    params.dst_bufs = {output};
+    params_.dst_bufs = {output};
     // The reduce semantics imposes the root to be both
     // sender and receiver. If the root is not in the mesh, we thus
     // have to artificially make it send and receive a dummy buffer
     if (!is_root_in_mesh) {
       at::Tensor dummy = createDummyTensor(output, op_type);
-      params.src_bufs.push_back(dummy);
+      params_.src_bufs.push_back(dummy);
     }
   }
+  validateParams();
+}
 
-  setParams(params);
+void Reduce::validateParams() {
+  Communication::validateParams();
   assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
   assertBufferCount(params_.src_bufs, 1);
 }
@@ -554,23 +528,23 @@ c10::intrusive_ptr<c10d::Work> Reduce::post(
 
 Allreduce::Allreduce(CommParams params)
     : Communication(params, "allreduce", false) {
-  assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
-  assertBufferCount(params_.src_bufs, 1);
-  assertBufferCount(params_.dst_bufs, 1);
+  validateParams();
 }
 
 Allreduce::Allreduce(TensorView* input_tv, TensorView* output_tv,
                     at::Tensor input, at::Tensor output, BinaryOpType op_type) 
     : Communication("allreduce", false) {
-  std::cout << "Allreduce" << std::endl;
-  CommParams params;
-  params.redOp = getC10dReduceOpType(op_type);
+  params_.redOp = getC10dReduceOpType(op_type);
   auto mesh = input_tv->getDeviceMesh();
-  params.team = mesh.vector();
-  params.dst_bufs = {output};
-  params.src_bufs = {input.view(output.sizes())};
+  params_.team = mesh.vector();
+  params_.dst_bufs = {output};
+  params_.src_bufs = {input.view(output.sizes())};
 
-  setParams(params);
+  validateParams();
+}
+
+void Allreduce::validateParams() {
+  Communication::validateParams();
   assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
   assertBufferCount(params_.src_bufs, 1);
   assertBufferCount(params_.dst_bufs, 1);
@@ -587,30 +561,32 @@ c10::intrusive_ptr<c10d::Work> Allreduce::post(
 
 ReduceScatter::ReduceScatter(CommParams params)
     : Communication(params, "reduce_scatter", false) {
-  assertBufferCount(params_.src_bufs, params_.team.size());
-  assertBufferCount(params_.dst_bufs, 1);
-  NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
+  validateParams();
 }
 
 ReduceScatter::ReduceScatter(TensorView* input_tv, TensorView* output_tv,
                              at::Tensor input, at::Tensor output, BinaryOpType op_type)
   : Communication("reduce_scatter", false) {
-  std::cout << "Reduce scatter" << std::endl;
-  CommParams params;
-  params.redOp = getC10dReduceOpType(op_type);
+  params_.redOp = getC10dReduceOpType(op_type);
   auto mesh = output_tv->getDeviceMesh();
-  params.team = mesh.vector();
-  params.dst_bufs = {output};
+  params_.team = mesh.vector();
+  params_.dst_bufs = {output};
 
-  int sharded_dim = dimWithParallelType(output_tv, ParallelType::DIDx);
+  int sharded_dim = dimWithParallelType(output_tv, ParallelType::DIDx, true);
+  int reduction_dim = dimWithParallelType(input_tv, ParallelType::DIDx);
+
   for (auto i : c10::irange(mesh.vector().size())) {
     std::vector<at::indexing::TensorIndex> indices(input.dim(), at::indexing::Slice());
     indices[sharded_dim] = at::indexing::Slice(i, i+1);
-    auto x = input.index(indices).contiguous().squeeze(sharded_dim);
-    params.src_bufs.push_back(x);
+    indices[reduction_dim] = at::indexing::Slice(0,1);
+    auto x = input.index(indices).squeeze(sharded_dim).contiguous();
+    params_.src_bufs.push_back(x);
   }
+  validateParams();
+}
 
-  setParams(params);
+void ReduceScatter::validateParams() {
+  Communication::validateParams();
   assertBufferCount(params_.src_bufs, params_.team.size());
   assertBufferCount(params_.dst_bufs, 1);
   NVF_ERROR(params_.team.size() > 1, "the team size must be greater than 1");
@@ -631,32 +607,30 @@ c10::intrusive_ptr<c10d::Work> ReduceScatter::post(
 }
 
 SendRecv::SendRecv(CommParams params) : Communication(params, "send/recv") {
-  assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
-  NVF_ERROR(
-      params_.team.size() == 1 || params_.team.size() == 2,
-      "the team size should be 1 or 2");
+  validateParams();
 }
 
 SendRecv::SendRecv(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
   DeviceIdxType my_device_index, DeviceIdxType root, DeviceIdxType receiver) 
     : Communication("send/recv") {
-   CommParams params;
-  params.root = root;
+  params_.root = root;
   auto mesh = DeviceMesh({receiver});
-  params.team = mesh.vector();
+  params_.team = mesh.vector();
   if (!mesh.has(root)) {
-    params.team.push_back(root);
+    params_.team.push_back(root);
   }
 
   if (my_device_index == root) {
-    params.src_bufs = {input};
-    std::cout << "SEND/RECV input size " << input.sizes() << std::endl;
+    params_.src_bufs = {input};
   }
   if (mesh.has(my_device_index)) {
-    params.dst_bufs = {output};
-    std::cout << "SEND/RECV output size " << output.sizes() << std::endl;
+    params_.dst_bufs = {output};
   }
-  setParams(params);
+  validateParams();
+}
+
+void SendRecv::validateParams() {
+  Communication::validateParams();
   assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
   NVF_ERROR(
       params_.team.size() == 1 || params_.team.size() == 2,

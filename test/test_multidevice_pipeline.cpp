@@ -132,21 +132,23 @@ TEST_F(PipelineTest, Pipeline) {
 }
 
 //(backend type, first stage's mesh, second stage's mesh (if not null), is first
-//stage sharded?, is second stage sharded?, do_reduction?, axis of tensor to shard)
+//stage sharded?, is second stage sharded?, axis of tensor to shard)
 using PipelineTestTwoStagesParams =
-    std::tuple<CommunicatorBackend, DeviceMesh, DeviceMesh, bool, bool, bool, int>;
-class PipelineTestTwoStages
+    std::tuple<CommunicatorBackend, DeviceMesh, DeviceMesh, bool, bool, int>;
+class CollectivePipeline
+    : public PipelineTest,
+      public ::testing::WithParamInterface<PipelineTestTwoStagesParams> {};
+class ReductionPipeline
     : public PipelineTest,
       public ::testing::WithParamInterface<PipelineTestTwoStagesParams> {};
 
-TEST_P(PipelineTestTwoStages, Communication) {
+TEST_P(CollectivePipeline, Communication) {
   auto
       [backend,
        mesh0,
        mesh1,
        is_stage0_sharded,
        is_stage1_sharded,
-       do_reduction,
        sharded_dim] = GetParam();
   if (!communicator->isBackendAvailable(backend)) {
     GTEST_SKIP() << "Backend not available";
@@ -157,32 +159,19 @@ TEST_P(PipelineTestTwoStages, Communication) {
     mesh1 = mesh0;
   }
 
-  int sharded_dim_extent = 4;
-  int second_axis_extent = 3;
+  std::vector<int64_t> unsharded_input_sizes = {4, 7, 3, 5};
   if (is_stage0_sharded) {
-    sharded_dim_extent = mesh0.vector().size();
-    std::cout << "Stage 0 sharded " << mesh0.vector().size() << std::endl;
-  } else if (is_stage1_sharded) {
-    sharded_dim_extent = mesh1.vector().size();
-    std::cout << "Stage 1 sharded " << mesh1.vector().size() << std::endl;
+    unsharded_input_sizes[sharded_dim] = mesh0.vector().size();
   }
-  if (is_stage1_sharded && do_reduction) {
-    GTEST_ASSERT_EQ(mesh0.vector().size(), mesh1.vector().size());
-    second_axis_extent = mesh1.vector().size();
+  if (is_stage1_sharded) {
+    unsharded_input_sizes[sharded_dim] = mesh1.vector().size();
   }
-  std::vector<int64_t> unsharded_input_sizes = {3, second_axis_extent, 3, 5};
-  unsharded_input_sizes[sharded_dim] = sharded_dim_extent;
-  std::vector<int64_t> sharded_input_sizes = unsharded_input_sizes;
-  if (is_stage0_sharded) {
-    sharded_input_sizes[sharded_dim] = 1;
-  }
-  
 
   FusionGuard fg(fusion.get());
   TensorView* tv0 = makeConcreteTensor(unsharded_input_sizes);
   TensorView* tv1 = sum(tv0, {3});
-  TensorView* tv2 = do_reduction ? sum(tv1, {0}) : set(tv1);
-  TensorView* tv3 = sum(tv2, {2});
+  TensorView* tv2 = set(tv1);
+  TensorView* tv3 = sum(tv2, {1});
   fusion->addInput(tv0);
   fusion->addOutput(tv3);
 
@@ -195,16 +184,64 @@ TEST_P(PipelineTestTwoStages, Communication) {
     tv1->axis(sharded_dim)->parallelize(ParallelType::DIDx);
   }
   if (is_stage1_sharded) {
-    // in case of reduction, axis(sharded_dim) of tv2 is a reduction axis, except if it
-    // was initially of size 1, in which case it is simply removed.
-    int tv2_outmost_axis = (do_reduction && second_axis_extent > 1) ? 1 : sharded_dim;
-    tv2->axis(tv2_outmost_axis)->parallelize(ParallelType::DIDx);
+    tv2->axis(sharded_dim)->parallelize(ParallelType::DIDx);
     tv3->axis(sharded_dim)->parallelize(ParallelType::DIDx);
   }
 
-  inputs = {at::ones(sharded_input_sizes, tensor_options) * communicator->deviceId()};
-  
-  // executeAndValidate();
+  unsharded_inputs = {at::randn(unsharded_input_sizes, tensor_options)};
+  executeAndValidate();
+}
+
+TEST_P(ReductionPipeline, Communication) {
+  auto
+      [backend,
+       mesh0,
+       mesh1,
+       is_stage0_sharded,
+       is_stage1_sharded,
+       sharded_dim] = GetParam();
+  if (!communicator->isBackendAvailable(backend)) {
+    GTEST_SKIP() << "Backend not available";
+  }
+  communicator->setDefaultBackend(backend);
+
+  if (mesh1.vector().empty()) {
+    mesh1 = mesh0;
+  }
+
+  std::vector<int64_t> unsharded_input_sizes = {3, 4, 3, 5};
+  if (is_stage0_sharded) {
+    unsharded_input_sizes[sharded_dim] = mesh0.vector().size();
+  }
+  if (is_stage1_sharded) {
+    unsharded_input_sizes[sharded_dim+1] = mesh1.vector().size();
+    unsharded_input_sizes[0] = mesh1.vector().size();
+  }
+  std::vector<int64_t> sharded_input_sizes = unsharded_input_sizes;
+
+  FusionGuard fg(fusion.get());
+  TensorView* tv0 = makeConcreteTensor(unsharded_input_sizes);
+  TensorView* tv1 = sum(tv0, {3});
+  TensorView* tv2 = sum(tv1, {sharded_dim});
+  TensorView* tv3 = sum(tv2, {1});
+  fusion->addInput(tv0);
+  fusion->addOutput(tv3);
+
+  tv0->setDeviceMesh(mesh0);
+  tv1->setDeviceMesh(mesh0);
+  tv2->setDeviceMesh(mesh1);
+  tv3->setDeviceMesh(mesh1);
+  if (is_stage0_sharded) {
+    tv0->axis(sharded_dim)->parallelize(ParallelType::DIDx);
+    tv1->axis(sharded_dim)->parallelize(ParallelType::DIDx);
+  }
+  if (is_stage1_sharded) {
+    tv2->axis(sharded_dim+1)->parallelize(ParallelType::DIDx);
+    tv3->axis(0)->parallelize(ParallelType::DIDx);
+  } 
+
+  unsharded_inputs = {at::randn(unsharded_input_sizes, tensor_options)};
+  executeAndValidate();
 }
 
 namespace {
@@ -224,87 +261,80 @@ auto all_nontrivial_meshes = ::testing::Values(mesh2, mesh3, mesh4);
 
 INSTANTIATE_TEST_SUITE_P(
     Gather,
-    PipelineTestTwoStages,
+    CollectivePipeline,
     ::testing::Combine(
         all_backends,
         all_meshes,
         all_meshes,
         ::testing::Values(true),
         ::testing::Values(false),
-        ::testing::Values(false),
-        ::testing::Values(0, 1)));
+        ::testing::Values(0, 2)));
 
 INSTANTIATE_TEST_SUITE_P(
     Scatter,
-    PipelineTestTwoStages,
+    CollectivePipeline,
     ::testing::Combine(
         all_backends,
         all_meshes,
         all_meshes,
         ::testing::Values(false),
         ::testing::Values(true),
-        ::testing::Values(false),
-        ::testing::Values(0, 1)));
+        ::testing::Values(0, 2)));
 
 INSTANTIATE_TEST_SUITE_P(
     Bcast,
-    PipelineTestTwoStages,
+    CollectivePipeline,
     ::testing::Combine(
         all_backends,
         all_meshes,
         all_meshes,
         ::testing::Values(false),
         ::testing::Values(false),
-        ::testing::Values(false),
-        ::testing::Values(0)));
+        ::testing::Values(0, 2)));
 
 INSTANTIATE_TEST_SUITE_P(
     Bcast_sharded,
-    PipelineTestTwoStages,
+    CollectivePipeline,
     ::testing::Combine(
         all_backends,
         ::testing::Values(mesh3, mesh4),
         ::testing::Values(mesh3, mesh4),
         ::testing::Values(true),
         ::testing::Values(true),
-        ::testing::Values(false),
-        ::testing::Values(0)));
+        ::testing::Values(0, 2)));
 
 INSTANTIATE_TEST_SUITE_P(
     Bcast_sharded_same_mesh,
-    PipelineTestTwoStages,
+    CollectivePipeline,
     ::testing::Combine(
         all_backends,
         ::testing::Values(mesh0, mesh1),
         ::testing::Values(mesh_null), // the same mesh is used for all tensors
         ::testing::Values(true),
         ::testing::Values(true),
-        ::testing::Values(false),
-        ::testing::Values(0)));
+        ::testing::Values(0, 2)));
 
 INSTANTIATE_TEST_SUITE_P(
     Reduce,
-    PipelineTestTwoStages,
+    ReductionPipeline,
     ::testing::Combine(
         all_backends,
         all_nontrivial_meshes,
         all_meshes,
         ::testing::Values(true),
         ::testing::Values(false),
-        ::testing::Values(true),
-        ::testing::Values(0)));
+        ::testing::Values(0, 1)));
 
 INSTANTIATE_TEST_SUITE_P(
     ReduceScatter,
-    PipelineTestTwoStages,
+    ReductionPipeline,
     ::testing::Combine(
         all_backends,
         all_nontrivial_meshes,
         ::testing::Values(mesh_null), // the same mesh is used for all tensors
         ::testing::Values(true),
         ::testing::Values(true),
-        ::testing::Values(true),
-        ::testing::Values(0)));
+        ::testing::Values(0, 1)));
 
 TEST_F(PipelineTest, Overlap) {
   // In this example we demonstrate how we can apply the optimization
@@ -560,11 +590,11 @@ TEST_F(PipelineTest, matmuls_megatron_mlp) {
   auto aT = at::randn({M, K}, tensor_options);
   auto b = at::randn({M, O}, tensor_options);
   auto myDevice = communicator->deviceId();
-  inputs = {x, shardInputTensor(aT, 0, mesh, myDevice),
-            shardInputTensor(b, 0, mesh, myDevice)};
+  inputs = {x, shardTensor(aT, tva, myDevice),
+            shardTensor(b, tvb, myDevice)};
   auto y = at::matmul(x, aT.transpose(0,1));
   auto z = at::matmul(y, b);
-  auto expected_outputs = {shardInputTensor(y.transpose(0,1), 0, mesh, myDevice), z};
+  auto expected_outputs = {shardTensor(y.transpose(0,1), tvy, myDevice), z};
 
   MultiDeviceExecutor runtime(std::move(fusion), *communicator);
   auto outputs = runtime.runWithInput(inputs);
@@ -585,10 +615,10 @@ TEST_F(PipelineTest, matmul_megatron_attention) {
   int Dv = 4;
   int Dk = 4;
 
-  TensorView* q = makeConcreteTensor({H, S, Dk}); //64
-  TensorView* k = makeConcreteTensor({H, S, Dk}); //64
-  TensorView* v = makeConcreteTensor({H, S, Dv});  //64
-  TensorView* w = makeConcreteTensor({H, Dv, D_model}); //40
+  TensorView* q = makeConcreteTensor({H, S, Dk});
+  TensorView* k = makeConcreteTensor({H, S, Dk});
+  TensorView* v = makeConcreteTensor({H, S, Dv});
+  TensorView* w = makeConcreteTensor({H, Dv, D_model});
   auto tv_inputs = {q, k, v, w};
   for (auto i : tv_inputs) {
     fusion->addInput(i);
@@ -633,17 +663,17 @@ TEST_F(PipelineTest, matmul_megatron_attention) {
   auto aten_v = at::randn({H, S, Dv}, tensor_options);
   auto aten_w = at::randn({H, Dv, D_model}, tensor_options);
   auto deviceId = communicator->deviceId();
-  inputs = {shardInputTensor(aten_q, 0, mesh, deviceId),
-            shardInputTensor(aten_k, 0, mesh, deviceId),
-            shardInputTensor(aten_v, 0, mesh, deviceId),
-            shardInputTensor(aten_w, 0, mesh, deviceId)};
+  inputs = {shardTensor(aten_q, q, deviceId),
+            shardTensor(aten_k, k, deviceId),
+            shardTensor(aten_v, v, deviceId),
+            shardTensor(aten_w, w, deviceId)};
   auto aten_qk = at::matmul(aten_q, aten_k.permute({0, 2, 1})); // H, S, Dk x H, Dk, S -> H, S, S
   auto aten_qkv = at::matmul(aten_qk, aten_v); // H, S, S x H, S, Dv -> H, S, Dv
   auto aten_qkv_concat = aten_qkv.permute({1, 0, 2}).flatten(1, 2); // S, H*Dv 
   auto aten_w_ = aten_w.flatten(0, 1); // H*Dv, Dmodel 
   auto out = at::matmul(aten_qkv_concat, aten_w_); // S, H*Dv x H*Dv, Dmodel -> S, Dmodel
-  auto expected_outputs = {shardInputTensor(aten_qk, 0, mesh, deviceId),
-                           shardInputTensor(aten_qkv, 0, mesh, deviceId),
+  auto expected_outputs = {shardTensor(aten_qk, qk, deviceId),
+                           shardTensor(aten_qkv, qkv, deviceId),
                            out};
   
   MultiDeviceExecutor runtime(std::move(fusion), *communicator);

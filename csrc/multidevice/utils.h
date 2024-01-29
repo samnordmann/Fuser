@@ -18,7 +18,7 @@ namespace nvfuser {
 bool isSharded(TensorView*);
 
 // Returns the axis that is parallelized with type
-int dimWithParallelType(TensorView*, ParallelType);
+int dimWithParallelType(TensorView*, ParallelType, bool withReductions=false);
 
 // Returns the subset of tvs which elements have the same multi-device sharding
 // as ref

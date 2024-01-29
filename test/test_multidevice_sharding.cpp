@@ -20,11 +20,11 @@ namespace nvfuser {
 
 class ShardingTest
     : public MultiDeviceTest,
-      public ::testing::WithParamInterface<std::tuple<bool, int>> {
+      public ::testing::WithParamInterface<int> {
 };
 
 TEST_P(ShardingTest, UnshardedGlobalInput) {
-  auto [concreteTV, sharded_dim] = GetParam();
+  auto sharded_dim = GetParam();
   std::unique_ptr<Fusion> fusion = std::make_unique<Fusion>();
   FusionGuard fg(fusion.get());
   int num_devices = communicator->size();
@@ -34,7 +34,7 @@ TEST_P(ShardingTest, UnshardedGlobalInput) {
   std::vector<int64_t> input_size = {3, 3};
   input_size[sharded_dim] = num_devices;
 
-  TensorView* tv0 = concreteTV ? makeConcreteTensor(input_size) : makeContigTensor(2);
+  TensorView* tv0 = makeConcreteTensor(input_size);
   TensorView* tv1 = add(tv0, tv0);
   TensorView* tv2 = set(tv1);
   TensorView* tv3 = add(tv2, tv2);
@@ -65,7 +65,7 @@ TEST_P(ShardingTest, UnshardedGlobalInput) {
 }
 
 TEST_P(ShardingTest, ShardGlobalInput) {
-  auto [concreteTV, sharded_dim] = GetParam();
+  auto sharded_dim = GetParam();
   std::unique_ptr<Fusion> fusion = std::make_unique<Fusion>();
   FusionGuard fg(fusion.get());
   int num_devices = communicator->size();
@@ -75,7 +75,7 @@ TEST_P(ShardingTest, ShardGlobalInput) {
   std::vector<int64_t> unsharded_input_size = {5, 3, 2};
   unsharded_input_size[sharded_dim] = num_devices;
 
-  TensorView* tv0 = concreteTV ? makeConcreteTensor(unsharded_input_size) : makeContigTensor(2);
+  TensorView* tv0 = makeConcreteTensor(unsharded_input_size);
   TensorView* tv1 = set(tv0);
   TensorView* tv2 = add(tv1, tv1);
   fusion->addInput(tv0);
@@ -90,7 +90,7 @@ TEST_P(ShardingTest, ShardGlobalInput) {
 
   auto x = at::randn(unsharded_input_size, tensor_options);
   std::vector<c10::IValue> inputs = {
-      shardInputTensor(x, sharded_dim, mesh, communicator->deviceId())};
+      shardTensor(x, tv0, communicator->deviceId())};
   auto ref_outputs = x * 2;
 
   MultiDeviceExecutor runtime(std::move(fusion), *communicator);
@@ -100,12 +100,17 @@ TEST_P(ShardingTest, ShardGlobalInput) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    NonoutermostAxis,
+    OutermostSharding,
     ShardingTest,
-    ::testing::Combine(
-      ::testing::Values(true),
-      ::testing::Values(1))
+    ::testing::Values(0)
 );
+
+INSTANTIATE_TEST_SUITE_P(
+    NonoutermostSharding,
+    ShardingTest,
+    ::testing::Values(1)
+);
+
 
 
 } // namespace nvfuser

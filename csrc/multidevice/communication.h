@@ -69,6 +69,11 @@ class Communication {
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) = 0;
 
+  // Allocates a contiguous intermediate tensor.
+  // Required for NCCL/UCC which expect contiguous input/output buffers.
+  // input tensor was sharded like [a b .. DIDx ... c] where DIDx is the axis 
+  // parallelized on DIDx the output tensor elements will be ordered as 
+ //  [DIDx a b c]  with device dimensions pushed to the outer most axis
   virtual bool requiresRelayoutOutputTensor(TensorView* input_tv, TensorView* output_tv);
   virtual at::Tensor allocateOutputTensor(TensorView* tv, at::Tensor& tensor);
   virtual void relayoutOutputTensor();
@@ -77,22 +82,21 @@ class Communication {
   // argument "name" is only used for printing
   // argument "has_root" indicates if the communication is rooted
   Communication(CommParams params, std::string name, bool has_root = true);
-
   Communication(std::string name, bool has_root = true);
 
-  void setParams(CommParams params);
+  virtual void validateParams();
 
   // store the arguments of the communication
   CommParams params_;
   // stores the relative index of the root in the team
   DeviceIdxType root_relative_index_ = -1;
   
-  std::vector<int64_t> output_permute_order_;
-  at::Tensor contig_output_tensor_;
-  at::Tensor output_;
+  // Used for copying contiguously copying output tensors. 
+  at::Tensor output_; // original output tensor
+  at::Tensor contig_output_; // contiguous output tensor
+  std::vector<int64_t> unpermute_order_; // contig_output_ -> output_
 
  private:
- void validateParams();
   // used for printing
   std::string collective_type_;
   // indicates if the communication is rooted
@@ -137,6 +141,8 @@ class Gather : public Communication {
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
+  protected:
+  virtual void validateParams() override;
 };
 
 /*
@@ -155,6 +161,8 @@ class Allgather : public Communication {
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
+  protected:
+  virtual void validateParams() override;
 };
 
 /*
@@ -175,6 +183,8 @@ class Scatter : public Communication {
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
+  protected:
+  virtual void validateParams() override;
 };
 
 /*
@@ -194,6 +204,8 @@ class Reduce : public Communication {
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
+  protected:
+  virtual void validateParams() override;
 };
 
 /*
@@ -211,6 +223,8 @@ class Allreduce : public Communication {
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
+  protected:
+  virtual void validateParams() override;
 };
 
 /*
@@ -227,6 +241,8 @@ class ReduceScatter : public Communication {
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
+  protected:
+  virtual void validateParams() override;
 };
 
 /*
@@ -252,6 +268,8 @@ class SendRecv : public Communication {
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
+  protected:
+  virtual void validateParams() override;
 };
 
 } // namespace nvfuser

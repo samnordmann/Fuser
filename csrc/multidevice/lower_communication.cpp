@@ -207,8 +207,6 @@ std::vector<std::shared_ptr<Communication>> lowerCommunication(
       isSharded(input_tv) && sender_mesh.vector().size() > 1;
   const bool is_output_sharded =
       isSharded(output_tv) && receiver_mesh.vector().size() > 1;
-  std::cout << input_tv->toString() << " " << is_input_sharded << " " << (sender_mesh.vector().size() > 1) << std::endl;
-  std::cout << output_tv->toString() << " " << is_output_sharded << " " << (receiver_mesh.vector().size() > 1) << std::endl;
 
   int input_sharded_dim = dimWithParallelType(input_tv, ParallelType::DIDx);
   int output_sharded_dim = dimWithParallelType(output_tv, ParallelType::DIDx);

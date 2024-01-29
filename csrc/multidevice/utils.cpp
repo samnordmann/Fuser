@@ -28,9 +28,12 @@ bool isSharded(TensorView* tv) {
   return is_sharded;
 }
 
-int dimWithParallelType(TensorView* tv, ParallelType pt) {
-  for (size_t i = 0; i < tv->nDims(); ++i) {
-    if (tv->axis(i)->getParallelType() == pt) {
+int dimWithParallelType(TensorView* tv, ParallelType pt, bool withReductions) {
+  auto ids = withReductions ? 
+             tv->getMaybeRFactorDomain() : 
+             TensorDomain::noReductions(tv->getMaybeRFactorDomain());
+  for (size_t i = 0; i < ids.size(); ++i) {
+    if (ids[i]->getParallelType() == pt) {
       return i;
     }
   }
@@ -137,6 +140,7 @@ void unshard(TensorView* tv) {
       id->parallelize(ParallelType::Serial);
     }
   }
+  tv->setDeviceMesh({});
 }
 
 void unshard(Fusion* fusion) {
