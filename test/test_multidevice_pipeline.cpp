@@ -40,6 +40,7 @@
 #include <iostream>
 
 namespace nvfuser {
+  
 using namespace torch::jit::fuser::cuda;
 using namespace at::indexing;
 
@@ -127,7 +128,7 @@ TEST_F(PipelineTest, Pipeline) {
       at::randn(input_shape1, tensor_options),
       at::randn(input_shape2, tensor_options)};
 
-  // executeAndValidate();
+  executeAndValidate();
 }
 
 //(backend type, first stage's mesh, second stage's mesh (if not null), is first
