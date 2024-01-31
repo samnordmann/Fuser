@@ -143,9 +143,8 @@ void PipelineTest::validate() {
     if (!output_tv->getDeviceMesh().has(communicator->deviceId())) {
       continue;
     }
-    auto ref_output = shardTensor(ref_unsharded_outputs.at(i),
-                                  output_tv,
-                                  communicator->deviceId());
+    auto ref_output = shardTensor(
+        ref_unsharded_outputs.at(i), output_tv, communicator->deviceId());
     auto obtained_output = outputs.at(i);
 
     GTEST_EXPECT_TRUE(ref_output.allclose(obtained_output, 1e-5, 1e-5))
@@ -163,9 +162,8 @@ void PipelineTest::execute() {
   for (int i : c10::irange(fusion->inputs().size())) {
     GTEST_ASSERT_TRUE(fusion->inputs().at(i)->isA<TensorView>());
     auto input_tv = fusion->inputs().at(i)->as<TensorView>();
-    auto input = shardTensor(unsharded_inputs.at(i).toTensor(),
-                             input_tv,
-                             communicator->deviceId());
+    auto input = shardTensor(
+        unsharded_inputs.at(i).toTensor(), input_tv, communicator->deviceId());
     inputs.push_back(input);
   }
 

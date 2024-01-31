@@ -26,17 +26,17 @@ bool isSharded(TensorView* tv) {
   for (IterDomain* id : TensorDomain::noReductions(tv->getLeafDomain())) {
     auto sharded_on_didx = id->getParallelType() == ParallelType::DIDx;
     NVF_ERROR(
-      !(is_sharded && sharded_on_didx),
-      "Cannot shard multiple axis on the same device dimension");
+        !(is_sharded && sharded_on_didx),
+        "Cannot shard multiple axis on the same device dimension");
     is_sharded = is_sharded || sharded_on_didx;
   }
   return is_sharded;
 }
 
 int dimWithParallelType(TensorView* tv, ParallelType pt, bool withReductions) {
-  auto ids = withReductions ? 
-             tv->getMaybeRFactorDomain() : 
-             TensorDomain::noReductions(tv->getMaybeRFactorDomain());
+  auto ids = withReductions
+      ? tv->getMaybeRFactorDomain()
+      : TensorDomain::noReductions(tv->getMaybeRFactorDomain());
   for (size_t i = 0; i < ids.size(); ++i) {
     if (ids[i]->getParallelType() == pt) {
       return i;
@@ -169,8 +169,8 @@ int64_t requestedNumberOfDevices(Fusion* fusion) {
 }
 
 bool isContiguousShard(TensorView* tv) {
-  // A shard is contiguous wrt the unsharded tensor if only the 
-  // outermost axis are device parallel. 
+  // A shard is contiguous wrt the unsharded tensor if only the
+  // outermost axis are device parallel.
   auto ids = TensorDomain::noReductions(tv->getLeafDomain());
   bool outermost_sharded = ids[0]->isDeviceDim();
   for (IterDomain* id : ids) {

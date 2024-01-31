@@ -45,8 +45,8 @@ void lowerToScatter(
   if (!isDeviceInvolved(my_device_index, root, output_tv->getDeviceMesh())) {
     return;
   }
-  comms.push_back(std::make_shared<Scatter>(input_tv, output_tv, input_tensor, output_tensor, 
-      my_device_index, root));
+  comms.push_back(std::make_shared<Scatter>(
+      input_tv, output_tv, input_tensor, output_tensor, my_device_index, root));
 }
 
 /*
@@ -67,7 +67,13 @@ void lowerToGather(
     if (!isDeviceInvolved(my_device_index, root, input_tv->getDeviceMesh())) {
       continue;
     }
-    comms.push_back(std::make_shared<Gather>(input_tv, output_tv, input_tensor, output_tensor, my_device_index, root));
+    comms.push_back(std::make_shared<Gather>(
+        input_tv,
+        output_tv,
+        input_tensor,
+        output_tensor,
+        my_device_index,
+        root));
   }
 }
 
@@ -82,7 +88,8 @@ void lowerToAllgather(
   if (!input_tv->getDeviceMesh().has(my_device_index)) {
     return;
   }
-  comms.push_back(std::make_shared<Allgather>(input_tv, output_tv, input_tensor, output_tensor));
+  comms.push_back(std::make_shared<Allgather>(
+      input_tv, output_tv, input_tensor, output_tensor));
 }
 
 // Adds several Broadcast or Send/Recv communications to the vector 'comms'
@@ -110,8 +117,14 @@ void lowerToBroadcastOrP2P(
       auto receiver = receiver_mesh.vector().at(i);
       auto receiver_mesh_ = DeviceMesh({receiver});
       if (isDeviceInvolved(my_device_index, root, receiver_mesh_)) {
-        comms.push_back(std::make_shared<SendRecv>(input_tv, output_tv, input_tensor, output_tensor, 
-                        my_device_index, root, receiver));
+        comms.push_back(std::make_shared<SendRecv>(
+            input_tv,
+            output_tv,
+            input_tensor,
+            output_tensor,
+            my_device_index,
+            root,
+            receiver));
       }
     }
   } else {
@@ -120,9 +133,22 @@ void lowerToBroadcastOrP2P(
     if (isDeviceInvolved(my_device_index, root, receiver_mesh)) {
       std::shared_ptr<Communication> comm;
       if (receiver_mesh.vector().size() == 1) {
-        comm = std::make_shared<SendRecv>(input_tv, output_tv, input_tensor, output_tensor, my_device_index, root, receiver_mesh.vector()[0]);
+        comm = std::make_shared<SendRecv>(
+            input_tv,
+            output_tv,
+            input_tensor,
+            output_tensor,
+            my_device_index,
+            root,
+            receiver_mesh.vector()[0]);
       } else {
-        comm = std::make_shared<Broadcast>(input_tv, output_tv, input_tensor, output_tensor, my_device_index, root);
+        comm = std::make_shared<Broadcast>(
+            input_tv,
+            output_tv,
+            input_tensor,
+            output_tensor,
+            my_device_index,
+            root);
       }
       comms.push_back(comm);
     }
@@ -142,7 +168,14 @@ void lowerToReduce(
     if (!isDeviceInvolved(my_device_index, root, input_tv->getDeviceMesh())) {
       continue;
     }
-    comms.push_back(std::make_shared<Reduce>(input_tv, output_tv, input_tensor, output_tensor, op_type, my_device_index, root));
+    comms.push_back(std::make_shared<Reduce>(
+        input_tv,
+        output_tv,
+        input_tensor,
+        output_tensor,
+        op_type,
+        my_device_index,
+        root));
   }
 }
 
@@ -157,7 +190,8 @@ void lowerToAllreduce(
   if (!input_tv->getDeviceMesh().has(my_device_index)) {
     return;
   }
-  comms.push_back(std::make_shared<Allreduce>(input_tv, output_tv, input_tensor, output_tensor, op_type));
+  comms.push_back(std::make_shared<Allreduce>(
+      input_tv, output_tv, input_tensor, output_tensor, op_type));
 }
 
 void lowerToReduceScatter(
@@ -171,7 +205,8 @@ void lowerToReduceScatter(
   if (!output_tv->getDeviceMesh().has(my_device_index)) {
     return;
   }
-  comms.push_back(std::make_shared<ReduceScatter>(input_tv, output_tv, input_tensor, output_tensor, op_type));
+  comms.push_back(std::make_shared<ReduceScatter>(
+      input_tv, output_tv, input_tensor, output_tensor, op_type));
 }
 
 } // namespace
@@ -283,7 +318,12 @@ std::vector<std::shared_ptr<Communication>> lowerCommunication(
     } else if (is_input_sharded && !is_output_sharded) {
       if (same_mesh) {
         lowerToAllgather(
-            my_device_index, input_tv, output_tv, input_tensor, output_tensor, comms);
+            my_device_index,
+            input_tv,
+            output_tv,
+            input_tensor,
+            output_tensor,
+            comms);
       } else {
         lowerToGather(
             my_device_index,

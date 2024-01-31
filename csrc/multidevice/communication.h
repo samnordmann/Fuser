@@ -8,9 +8,9 @@
 #pragma once
 #ifdef USE_DISTRIBUTED
 
+#include <ir/interface_nodes.h>
 #include <multidevice/communicator.h>
 #include <multidevice/multidevice.h>
-#include <ir/interface_nodes.h>
 #include <torch/csrc/distributed/c10d/Types.hpp>
 #include <type.h>
 
@@ -71,10 +71,12 @@ class Communication {
 
   // Allocates a contiguous intermediate tensor.
   // Required for NCCL/UCC which expect contiguous input/output buffers.
-  // input tensor was sharded like [a b .. DIDx ... c] where DIDx is the axis 
-  // parallelized on DIDx the output tensor elements will be ordered as 
- //  [DIDx a b c]  with device dimensions pushed to the outer most axis
-  virtual bool requiresRelayoutOutputTensor(TensorView* input_tv, TensorView* output_tv);
+  // input tensor was sharded like [a b .. DIDx ... c] where DIDx is the axis
+  // parallelized on DIDx the output tensor elements will be ordered as
+  //  [DIDx a b c]  with device dimensions pushed to the outer most axis
+  virtual bool requiresRelayoutOutputTensor(
+      TensorView* input_tv,
+      TensorView* output_tv);
   virtual at::Tensor allocateOutputTensor(TensorView* tv, at::Tensor& tensor);
   virtual void relayoutOutputTensor();
 
@@ -90,8 +92,8 @@ class Communication {
   CommParams params_;
   // stores the relative index of the root in the team
   DeviceIdxType root_relative_index_ = -1;
-  
-  // Used for copying contiguously copying output tensors. 
+
+  // Used for copying contiguously copying output tensors.
   at::Tensor output_; // original output tensor
   at::Tensor contig_output_; // contiguous output tensor
   std::vector<int64_t> unpermute_order_; // contig_output_ -> output_
@@ -115,8 +117,13 @@ Requirements:
 class Broadcast : public Communication {
  public:
   Broadcast(CommParams params);
-  Broadcast(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
-            DeviceIdxType my_device_index, DeviceIdxType root);
+  Broadcast(
+      TensorView* input_tv,
+      TensorView* output_tv,
+      at::Tensor input,
+      at::Tensor output,
+      DeviceIdxType my_device_index,
+      DeviceIdxType root);
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
@@ -135,13 +142,19 @@ Requirements:
 */
 class Gather : public Communication {
  public:
-  Gather(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
-          DeviceIdxType my_device_index, DeviceIdxType root);
+  Gather(
+      TensorView* input_tv,
+      TensorView* output_tv,
+      at::Tensor input,
+      at::Tensor output,
+      DeviceIdxType my_device_index,
+      DeviceIdxType root);
   Gather(CommParams params);
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
-  protected:
+
+ protected:
   virtual void validateParams() override;
 };
 
@@ -156,12 +169,17 @@ Requirements:
 */
 class Allgather : public Communication {
  public:
-  Allgather(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output);
+  Allgather(
+      TensorView* input_tv,
+      TensorView* output_tv,
+      at::Tensor input,
+      at::Tensor output);
   Allgather(CommParams params);
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
-  protected:
+
+ protected:
   virtual void validateParams() override;
 };
 
@@ -178,12 +196,18 @@ Requirements:
 class Scatter : public Communication {
  public:
   Scatter(CommParams params);
-  Scatter(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
-          DeviceIdxType my_device_index, DeviceIdxType root);
+  Scatter(
+      TensorView* input_tv,
+      TensorView* output_tv,
+      at::Tensor input,
+      at::Tensor output,
+      DeviceIdxType my_device_index,
+      DeviceIdxType root);
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
-  protected:
+
+ protected:
   virtual void validateParams() override;
 };
 
@@ -199,12 +223,19 @@ Requirements:
 class Reduce : public Communication {
  public:
   Reduce(CommParams params);
-  Reduce(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
-          BinaryOpType op_type, DeviceIdxType my_device_index, DeviceIdxType root);
+  Reduce(
+      TensorView* input_tv,
+      TensorView* output_tv,
+      at::Tensor input,
+      at::Tensor output,
+      BinaryOpType op_type,
+      DeviceIdxType my_device_index,
+      DeviceIdxType root);
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
-  protected:
+
+ protected:
   virtual void validateParams() override;
 };
 
@@ -218,12 +249,17 @@ Requirements:
 class Allreduce : public Communication {
  public:
   Allreduce(CommParams params);
-  Allreduce(TensorView* input_tv, TensorView* output_tv,
-            at::Tensor input, at::Tensor output, BinaryOpType op_type);
+  Allreduce(
+      TensorView* input_tv,
+      TensorView* output_tv,
+      at::Tensor input,
+      at::Tensor output,
+      BinaryOpType op_type);
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
-  protected:
+
+ protected:
   virtual void validateParams() override;
 };
 
@@ -236,12 +272,18 @@ Requirements:
 */
 class ReduceScatter : public Communication {
  public:
-  ReduceScatter(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, BinaryOpType op_type);
+  ReduceScatter(
+      TensorView* input_tv,
+      TensorView* output_tv,
+      at::Tensor input,
+      at::Tensor output,
+      BinaryOpType op_type);
   ReduceScatter(CommParams params);
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
-  protected:
+
+ protected:
   virtual void validateParams() override;
 };
 
@@ -263,12 +305,19 @@ buffer
 class SendRecv : public Communication {
  public:
   SendRecv(CommParams params);
-  SendRecv(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
-  DeviceIdxType my_device_index, DeviceIdxType root, DeviceIdxType receiver);
+  SendRecv(
+      TensorView* input_tv,
+      TensorView* output_tv,
+      at::Tensor input,
+      at::Tensor output,
+      DeviceIdxType my_device_index,
+      DeviceIdxType root,
+      DeviceIdxType receiver);
   c10::intrusive_ptr<c10d::Work> post(
       Communicator& comm,
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
-  protected:
+
+ protected:
   virtual void validateParams() override;
 };
 

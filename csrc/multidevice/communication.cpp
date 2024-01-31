@@ -223,8 +223,8 @@ void Communication::relayoutOutputTensor() {
 
 Broadcast::Broadcast(CommParams params) : Communication(params, "broadcast") {}
 
-Broadcast::Broadcast(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
-            DeviceIdxType my_device_index, DeviceIdxType root) 
+Broadcast::Broadcast(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output,
+            DeviceIdxType my_device_index, DeviceIdxType root)
             : Communication("broadcast") {
   params_.root = root;
   auto mesh = output_tv->getDeviceMesh();
@@ -273,7 +273,7 @@ Gather::Gather(CommParams params) : Communication(params, "gather") {
   validateParams();
 }
 
-Gather::Gather(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
+Gather::Gather(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output,
                  DeviceIdxType my_device_index, DeviceIdxType root) :
     Communication("gather") {
   params_.root = root;
@@ -351,7 +351,7 @@ Allgather::Allgather(CommParams params)
   validateParams();
 }
 
-Allgather::Allgather(TensorView* input_tv, TensorView* output_tv, 
+Allgather::Allgather(TensorView* input_tv, TensorView* output_tv,
                      at::Tensor input, at::Tensor output) :
     Communication("allgather", false) {
   auto mesh = input_tv->getDeviceMesh();
@@ -398,7 +398,7 @@ Scatter::Scatter(CommParams params) : Communication(params, "scatter") {
   validateParams();
 }
 
-Scatter::Scatter(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
+Scatter::Scatter(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output,
                  DeviceIdxType my_device_index, DeviceIdxType root) : Communication("scatter") {
   params_.root = root;
   DeviceMesh mesh = output_tv->getDeviceMesh();
@@ -466,8 +466,8 @@ Reduce::Reduce(CommParams params) : Communication(params, "reduce") {
   validateParams();
 }
 
-Reduce::Reduce(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
-          BinaryOpType op_type, DeviceIdxType my_device_index, DeviceIdxType root) 
+Reduce::Reduce(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output,
+          BinaryOpType op_type, DeviceIdxType my_device_index, DeviceIdxType root)
           : Communication("reduce") {
   params_.root = root;
   params_.redOp = getC10dReduceOpType(op_type);
@@ -534,7 +534,7 @@ Allreduce::Allreduce(CommParams params)
 }
 
 Allreduce::Allreduce(TensorView* input_tv, TensorView* output_tv,
-                    at::Tensor input, at::Tensor output, BinaryOpType op_type) 
+                    at::Tensor input, at::Tensor output, BinaryOpType op_type)
     : Communication("allreduce", false) {
   params_.redOp = getC10dReduceOpType(op_type);
   auto mesh = input_tv->getDeviceMesh();
@@ -612,8 +612,8 @@ SendRecv::SendRecv(CommParams params) : Communication(params, "send/recv") {
   validateParams();
 }
 
-SendRecv::SendRecv(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output, 
-  DeviceIdxType my_device_index, DeviceIdxType root, DeviceIdxType receiver) 
+SendRecv::SendRecv(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output,
+  DeviceIdxType my_device_index, DeviceIdxType root, DeviceIdxType receiver)
     : Communication("send/recv") {
   params_.root = root;
   auto mesh = DeviceMesh({receiver});

@@ -18,10 +18,8 @@
 
 namespace nvfuser {
 
-class ShardingTest
-    : public MultiDeviceTest,
-      public ::testing::WithParamInterface<int> {
-};
+class ShardingTest : public MultiDeviceTest,
+                     public ::testing::WithParamInterface<int> {};
 
 TEST_P(ShardingTest, UnshardedGlobalInput) {
   auto sharded_dim = GetParam();
@@ -99,10 +97,6 @@ TEST_P(ShardingTest, ShardGlobalInput) {
       runtime.fusion(), outputs, inputs, {ref_outputs}, __LINE__, __FILE__);
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    Sharding,
-    ShardingTest,
-    ::testing::Values(0, 1)
-);
+INSTANTIATE_TEST_SUITE_P(Sharding, ShardingTest, ::testing::Values(0, 1));
 } // namespace nvfuser
 #endif

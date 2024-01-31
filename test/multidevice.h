@@ -59,8 +59,9 @@ class MultiDeviceTest : public NVFuserTest {
       if (it != devices.end()) {
         i = std::distance(devices.begin(), it);
       }
-      std::vector<at::indexing::TensorIndex> indices(tensor.dim(), at::indexing::Slice());
-      indices[sharded_dim] = at::indexing::Slice(i, i+1);
+      std::vector<at::indexing::TensorIndex> indices(
+          tensor.dim(), at::indexing::Slice());
+      indices[sharded_dim] = at::indexing::Slice(i, i + 1);
       return tensor.index(indices).contiguous();
     } else {
       return tensor;

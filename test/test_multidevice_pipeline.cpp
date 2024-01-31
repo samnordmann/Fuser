@@ -40,7 +40,7 @@
 #include <iostream>
 
 namespace nvfuser {
-  
+
 using namespace torch::jit::fuser::cuda;
 using namespace at::indexing;
 
@@ -132,7 +132,7 @@ TEST_F(PipelineTest, Pipeline) {
 }
 
 //(backend type, first stage's mesh, second stage's mesh (if not null), is first
-//stage sharded?, is second stage sharded?, axis of tensor to shard)
+// stage sharded?, is second stage sharded?, axis of tensor to shard)
 using PipelineTestTwoStagesParams =
     std::tuple<CommunicatorBackend, DeviceMesh, DeviceMesh, bool, bool, int>;
 class CollectivePipeline
@@ -214,7 +214,7 @@ TEST_P(ReductionPipeline, Communication) {
     unsharded_input_sizes[sharded_dim] = mesh0.vector().size();
   }
   if (is_stage1_sharded) {
-    unsharded_input_sizes[sharded_dim+1] = mesh1.vector().size();
+    unsharded_input_sizes[sharded_dim + 1] = mesh1.vector().size();
     unsharded_input_sizes[0] = mesh1.vector().size();
   }
   std::vector<int64_t> sharded_input_sizes = unsharded_input_sizes;
@@ -236,9 +236,9 @@ TEST_P(ReductionPipeline, Communication) {
     tv1->axis(sharded_dim)->parallelize(ParallelType::DIDx);
   }
   if (is_stage1_sharded) {
-    tv2->axis(sharded_dim+1)->parallelize(ParallelType::DIDx);
+    tv2->axis(sharded_dim + 1)->parallelize(ParallelType::DIDx);
     tv3->axis(0)->parallelize(ParallelType::DIDx);
-  } 
+  }
 
   unsharded_inputs = {at::randn(unsharded_input_sizes, tensor_options)};
   executeAndValidate();
@@ -602,9 +602,9 @@ TEST_F(PipelineTest, matmuls_megatron_mlp) {
   auto b = at::randn({M, O}, tensor_options);
   auto myDevice = communicator->deviceId();
   inputs = {x, shardTensor(aT, tva, myDevice), shardTensor(b, tvb, myDevice)};
-  auto y = at::matmul(x, aT.transpose(0,1));
+  auto y = at::matmul(x, aT.transpose(0, 1));
   auto z = at::matmul(y, b);
-  auto expected_outputs = {shardTensor(y.transpose(0,1), tvy, myDevice), z};
+  auto expected_outputs = {shardTensor(y.transpose(0, 1), tvy, myDevice), z};
 
   MultiDeviceExecutor runtime(std::move(fusion), *communicator);
   auto outputs = runtime.runWithInput(inputs);
@@ -700,15 +700,15 @@ TEST_F(PipelineTest, matmul_megatron_attention) {
   auto aten_qk = at::matmul(
       aten_q, aten_k.permute({0, 2, 1})); // H, S, Dk x H, Dk, S -> H, S, S
   auto aten_qkv = at::matmul(aten_qk, aten_v); // H, S, S x H, S, Dv -> H, S, Dv
-  auto aten_qkv_concat = aten_qkv.permute({1, 0, 2}).flatten(1, 2); // S, H*Dv 
-  auto aten_w_ = aten_w.flatten(0, 1); // H*Dv, Dmodel 
+  auto aten_qkv_concat = aten_qkv.permute({1, 0, 2}).flatten(1, 2); // S, H*Dv
+  auto aten_w_ = aten_w.flatten(0, 1); // H*Dv, Dmodel
   auto out = at::matmul(
       aten_qkv_concat, aten_w_); // S, H*Dv x H*Dv, Dmodel -> S, Dmodel
   auto expected_outputs = {
       shardTensor(aten_qk, qk, deviceId),
       shardTensor(aten_qkv, qkv, deviceId),
       out};
-  
+
   MultiDeviceExecutor runtime(std::move(fusion), *communicator);
   auto outputs = runtime.runWithInput(inputs);
   testValidate(
