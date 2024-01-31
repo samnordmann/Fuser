@@ -100,18 +100,9 @@ TEST_P(ShardingTest, ShardGlobalInput) {
 }
 
 INSTANTIATE_TEST_SUITE_P(
-    OutermostSharding,
+    Sharding,
     ShardingTest,
-    ::testing::Values(0)
+    ::testing::Values(0, 1)
 );
-
-INSTANTIATE_TEST_SUITE_P(
-    NonoutermostSharding,
-    ShardingTest,
-    ::testing::Values(1)
-);
-
-
-
 } // namespace nvfuser
 #endif

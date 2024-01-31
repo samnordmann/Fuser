@@ -41,7 +41,7 @@ class MultiDeviceEnvironment : public testing::Environment {
  private:
   std::unique_ptr<Communicator> communicator_ = nullptr;
   bool debug_print_ = false;
-  bool do_barrier_at_test_ = false;
+  bool do_barrier_at_test_ = true;
   bool time_print_ = false;
 };
 

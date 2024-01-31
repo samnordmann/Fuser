@@ -140,14 +140,16 @@ std::vector<int64_t> unpermuteOrder(std::vector<int64_t>& permute_order) {
 }
 } // namespace
 
-Communication::Communication(std::string name, bool has_root) :
-  collective_type_(std::move(name)),
-  has_root_(has_root) {}
+Communication::Communication(std::string name, bool has_root)
+  : collective_type_(std::move(name)),
+    has_root_(has_root) {}
 
 Communication::Communication(CommParams params, std::string name, bool has_root)
     : params_(std::move(params)),
       collective_type_(std::move(name)),
-      has_root_(has_root) {}
+      has_root_(has_root) {
+  validateParams();
+}
 
 void Communication::validateParams() {
   assertBuffersHaveSameSize(params_.src_bufs, params_.dst_bufs);
