@@ -238,7 +238,7 @@ Broadcast::Broadcast(
     DeviceIdxType root)
     : Communication("broadcast") {
   params_.root = root;
-  const auto &mesh = output_tv->getDeviceMesh();
+  const auto& mesh = output_tv->getDeviceMesh();
   params_.team = mesh.vector();
   if (!mesh.has(root)) {
     params_.team.push_back(root);
@@ -376,7 +376,7 @@ Allgather::Allgather(
     at::Tensor input,
     at::Tensor output)
     : Communication("allgather", false) {
-  const auto &mesh = input_tv->getDeviceMesh();
+  const auto& mesh = input_tv->getDeviceMesh();
   params_.team = mesh.vector();
 
   if (requiresRelayoutOutputTensor(input_tv, output_tv)) {
@@ -507,7 +507,7 @@ Reduce::Reduce(
     : Communication("reduce") {
   params_.root = root;
   params_.redOp = getC10dReduceOpType(op_type);
-  const auto &mesh = input_tv->getDeviceMesh();
+  const auto& mesh = input_tv->getDeviceMesh();
   params_.team = mesh.vector();
   bool is_root_in_mesh = mesh.has(root);
   if (!is_root_in_mesh) {
@@ -577,7 +577,7 @@ Allreduce::Allreduce(
     BinaryOpType op_type)
     : Communication("allreduce", false) {
   params_.redOp = getC10dReduceOpType(op_type);
-  const auto &mesh = input_tv->getDeviceMesh();
+  const auto& mesh = input_tv->getDeviceMesh();
   params_.team = mesh.vector();
   params_.dst_bufs = {output};
   params_.src_bufs = {input.view(output.sizes())};
@@ -614,7 +614,7 @@ ReduceScatter::ReduceScatter(
     BinaryOpType op_type)
     : Communication("reduce_scatter", false) {
   params_.redOp = getC10dReduceOpType(op_type);
-  const auto &mesh = output_tv->getDeviceMesh();
+  const auto& mesh = output_tv->getDeviceMesh();
   params_.team = mesh.vector();
   params_.dst_bufs = {output};
 
@@ -667,7 +667,7 @@ SendRecv::SendRecv(
     DeviceIdxType receiver)
     : Communication("send/recv") {
   params_.root = root;
-  const auto &mesh = DeviceMesh({receiver});
+  const auto& mesh = DeviceMesh({receiver});
   params_.team = mesh.vector();
   if (!mesh.has(root)) {
     params_.team.push_back(root);

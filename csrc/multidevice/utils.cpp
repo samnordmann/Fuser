@@ -33,7 +33,10 @@ bool isSharded(TensorView* tv) {
   return is_sharded;
 }
 
-int64_t dimWithParallelType(TensorView* tv, ParallelType pt, bool withReductions) {
+int64_t dimWithParallelType(
+    TensorView* tv,
+    ParallelType pt,
+    bool withReductions) {
   auto ids = withReductions
       ? tv->getMaybeRFactorDomain()
       : TensorDomain::noReductions(tv->getMaybeRFactorDomain());
