@@ -86,7 +86,7 @@ class Communication {
   Communication(CommParams params, std::string name, bool has_root = true);
   Communication(std::string name, bool has_root = true);
 
-  virtual void validateParams();
+  void validateParams();
 
   // store the arguments of the communication
   CommParams params_;
@@ -155,7 +155,7 @@ class Gather : public Communication {
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
 
  protected:
-  virtual void validateParams() override;
+  void validateParams();
 };
 
 /*
@@ -180,7 +180,7 @@ class Allgather : public Communication {
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
 
  protected:
-  virtual void validateParams() override;
+  void validateParams();
 };
 
 /*
@@ -208,7 +208,7 @@ class Scatter : public Communication {
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
 
  protected:
-  virtual void validateParams() override;
+  void validateParams();
 };
 
 /*
@@ -236,7 +236,7 @@ class Reduce : public Communication {
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
 
  protected:
-  virtual void validateParams() override;
+  void validateParams();
 };
 
 /*
@@ -260,7 +260,7 @@ class Allreduce : public Communication {
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
 
  protected:
-  virtual void validateParams() override;
+  void validateParams();
 };
 
 /*
@@ -284,7 +284,7 @@ class ReduceScatter : public Communication {
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
 
  protected:
-  virtual void validateParams() override;
+  void validateParams();
 };
 
 /*
@@ -318,7 +318,7 @@ class SendRecv : public Communication {
       std::optional<CommunicatorBackend> backend = std::nullopt) override;
 
  protected:
-  virtual void validateParams() override;
+  void validateParams();
 };
 
 } // namespace nvfuser

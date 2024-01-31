@@ -134,15 +134,14 @@ std::vector<int64_t> permuteOrder(TensorView* tv) {
 std::vector<int64_t> unpermuteOrder(std::vector<int64_t>& permute_order) {
   std::vector<int64_t> unpremute_order(permute_order.size());
   for (size_t i = 0; i < permute_order.size(); i++) {
-    unpremute_order[permute_order[i]] = i;
+    unpremute_order[permute_order[i]] = static_cast<int64_t>(i);
   }
   return unpremute_order;
 }
 } // namespace
 
 Communication::Communication(std::string name, bool has_root)
-  : collective_type_(std::move(name)),
-    has_root_(has_root) {}
+    : collective_type_(std::move(name)), has_root_(has_root) {}
 
 Communication::Communication(CommParams params, std::string name, bool has_root)
     : params_(std::move(params)),
@@ -198,7 +197,9 @@ std::string Communication::toString(int indent) const {
   return ss.str();
 }
 
-at::Tensor Communication::allocateOutputTensor(TensorView* tv, at::Tensor& tensor) {
+at::Tensor Communication::allocateOutputTensor(
+    TensorView* tv,
+    at::Tensor& tensor) {
   auto original_shape = tensor.sizes();
   auto permute_order = permuteOrder(tv);
   unpermute_order_ = unpermuteOrder(permute_order);
@@ -210,24 +211,34 @@ at::Tensor Communication::allocateOutputTensor(TensorView* tv, at::Tensor& tenso
   return contig_output_;
 }
 
-bool Communication::requiresRelayoutOutputTensor(TensorView* input_tv, TensorView* output_tv) {
+bool Communication::requiresRelayoutOutputTensor(
+    TensorView* input_tv,
+    TensorView* output_tv) {
   return !isContiguousShard(input_tv) && isContiguousShard(output_tv);
 }
 
 void Communication::relayoutOutputTensor() {
-  // Permute the axis into the correct order and copy into the destination buffer.
+  // Permute the axis into the correct order and copy into the destination
+  // buffer.
   if (output_.numel() > 0) {
     output_.copy_(contig_output_.permute(unpermute_order_));
   }
 }
 
-Broadcast::Broadcast(CommParams params) : Communication(params, "broadcast") {}
+Broadcast::Broadcast(CommParams params) : Communication(params, "broadcast") {
+  validateParams();
+}
 
-Broadcast::Broadcast(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output,
-            DeviceIdxType my_device_index, DeviceIdxType root)
-            : Communication("broadcast") {
+Broadcast::Broadcast(
+    TensorView* input_tv,
+    TensorView* output_tv,
+    at::Tensor input,
+    at::Tensor output,
+    DeviceIdxType my_device_index,
+    DeviceIdxType root)
+    : Communication("broadcast") {
   params_.root = root;
-  auto mesh = output_tv->getDeviceMesh();
+  const auto &mesh = output_tv->getDeviceMesh();
   params_.team = mesh.vector();
   if (!mesh.has(root)) {
     params_.team.push_back(root);
@@ -273,9 +284,14 @@ Gather::Gather(CommParams params) : Communication(params, "gather") {
   validateParams();
 }
 
-Gather::Gather(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output,
-                 DeviceIdxType my_device_index, DeviceIdxType root) :
-    Communication("gather") {
+Gather::Gather(
+    TensorView* input_tv,
+    TensorView* output_tv,
+    at::Tensor input,
+    at::Tensor output,
+    DeviceIdxType my_device_index,
+    DeviceIdxType root)
+    : Communication("gather") {
   params_.root = root;
   DeviceMesh mesh = input_tv->getDeviceMesh();
   params_.team = mesh.vector();
@@ -284,12 +300,14 @@ Gather::Gather(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at
     params_.team.push_back(root);
   }
 
-  if (my_device_index == root && requiresRelayoutOutputTensor(input_tv, output_tv)) {
+  if (my_device_index == root &&
+      requiresRelayoutOutputTensor(input_tv, output_tv)) {
     output_ = output;
     output = allocateOutputTensor(input_tv, output);
   }
 
-  if (requiresRelayoutOutputTensor(input_tv, output_tv) && mesh.has(my_device_index)) {
+  if (requiresRelayoutOutputTensor(input_tv, output_tv) &&
+      mesh.has(my_device_index)) {
     // Permute the device axis to the front.
     // Input tensors are not copied since the device axis are size 1.
     params_.src_bufs = {input.permute(permuteOrder(input_tv))};
@@ -299,9 +317,10 @@ Gather::Gather(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at
 
   if (my_device_index == root) {
     for (auto i : c10::irange(mesh.vector().size())) {
-      std::vector<at::indexing::TensorIndex> indices(output.dim(), at::indexing::Slice());
+      std::vector<at::indexing::TensorIndex> indices(
+          output.dim(), at::indexing::Slice());
       // Pushed the sharded dimension forward.
-      indices[0] = at::indexing::Slice(i, i+1);
+      indices[0] = at::indexing::Slice(i, i + 1);
       params_.dst_bufs.push_back(output.index(indices));
     }
     // The gather semantics imposes the root has to be in receiver mesh
@@ -351,10 +370,13 @@ Allgather::Allgather(CommParams params)
   validateParams();
 }
 
-Allgather::Allgather(TensorView* input_tv, TensorView* output_tv,
-                     at::Tensor input, at::Tensor output) :
-    Communication("allgather", false) {
-  auto mesh = input_tv->getDeviceMesh();
+Allgather::Allgather(
+    TensorView* input_tv,
+    TensorView* output_tv,
+    at::Tensor input,
+    at::Tensor output)
+    : Communication("allgather", false) {
+  const auto &mesh = input_tv->getDeviceMesh();
   params_.team = mesh.vector();
 
   if (requiresRelayoutOutputTensor(input_tv, output_tv)) {
@@ -363,8 +385,9 @@ Allgather::Allgather(TensorView* input_tv, TensorView* output_tv,
   }
 
   for (auto i : c10::irange(mesh.vector().size())) {
-    std::vector<at::indexing::TensorIndex> indices(output.dim(), at::indexing::Slice());
-    indices[0] = at::indexing::Slice(i, i+1);
+    std::vector<at::indexing::TensorIndex> indices(
+        output.dim(), at::indexing::Slice());
+    indices[0] = at::indexing::Slice(i, i + 1);
     params_.dst_bufs.push_back(output.index(indices));
   }
   // If output axes were permuted, view the input in the same shape.
@@ -398,8 +421,14 @@ Scatter::Scatter(CommParams params) : Communication(params, "scatter") {
   validateParams();
 }
 
-Scatter::Scatter(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output,
-                 DeviceIdxType my_device_index, DeviceIdxType root) : Communication("scatter") {
+Scatter::Scatter(
+    TensorView* input_tv,
+    TensorView* output_tv,
+    at::Tensor input,
+    at::Tensor output,
+    DeviceIdxType my_device_index,
+    DeviceIdxType root)
+    : Communication("scatter") {
   params_.root = root;
   DeviceMesh mesh = output_tv->getDeviceMesh();
   params_.team = mesh.vector();
@@ -412,11 +441,12 @@ Scatter::Scatter(TensorView* input_tv, TensorView* output_tv, at::Tensor input, 
     params_.dst_bufs = {output};
   }
 
-  int sharded_dim = dimWithParallelType(output_tv, ParallelType::DIDx);
+  auto sharded_dim = dimWithParallelType(output_tv, ParallelType::DIDx);
   if (my_device_index == root) {
     for (auto i : c10::irange(mesh.vector().size())) {
-      std::vector<at::indexing::TensorIndex> indices(input.dim(), at::indexing::Slice());
-      indices[sharded_dim] = at::indexing::Slice(i, i+1);
+      std::vector<at::indexing::TensorIndex> indices(
+          input.dim(), at::indexing::Slice());
+      indices[sharded_dim] = at::indexing::Slice(i, i + 1);
       auto x = input.index(indices).contiguous();
       params_.src_bufs.push_back(x);
     }
@@ -466,19 +496,25 @@ Reduce::Reduce(CommParams params) : Communication(params, "reduce") {
   validateParams();
 }
 
-Reduce::Reduce(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output,
-          BinaryOpType op_type, DeviceIdxType my_device_index, DeviceIdxType root)
-          : Communication("reduce") {
+Reduce::Reduce(
+    TensorView* input_tv,
+    TensorView* output_tv,
+    at::Tensor input,
+    at::Tensor output,
+    BinaryOpType op_type,
+    DeviceIdxType my_device_index,
+    DeviceIdxType root)
+    : Communication("reduce") {
   params_.root = root;
   params_.redOp = getC10dReduceOpType(op_type);
-  auto mesh = input_tv->getDeviceMesh();
+  const auto &mesh = input_tv->getDeviceMesh();
   params_.team = mesh.vector();
   bool is_root_in_mesh = mesh.has(root);
   if (!is_root_in_mesh) {
     params_.team.push_back(root);
   }
 
-  int sharded_dim = dimWithParallelType(input_tv, ParallelType::DIDx);
+  auto sharded_dim = dimWithParallelType(input_tv, ParallelType::DIDx);
   if (mesh.has(my_device_index)) {
     params_.src_bufs = {input.squeeze(sharded_dim)};
   }
@@ -533,11 +569,15 @@ Allreduce::Allreduce(CommParams params)
   validateParams();
 }
 
-Allreduce::Allreduce(TensorView* input_tv, TensorView* output_tv,
-                    at::Tensor input, at::Tensor output, BinaryOpType op_type)
+Allreduce::Allreduce(
+    TensorView* input_tv,
+    TensorView* output_tv,
+    at::Tensor input,
+    at::Tensor output,
+    BinaryOpType op_type)
     : Communication("allreduce", false) {
   params_.redOp = getC10dReduceOpType(op_type);
-  auto mesh = input_tv->getDeviceMesh();
+  const auto &mesh = input_tv->getDeviceMesh();
   params_.team = mesh.vector();
   params_.dst_bufs = {output};
   params_.src_bufs = {input.view(output.sizes())};
@@ -566,21 +606,26 @@ ReduceScatter::ReduceScatter(CommParams params)
   validateParams();
 }
 
-ReduceScatter::ReduceScatter(TensorView* input_tv, TensorView* output_tv,
-                             at::Tensor input, at::Tensor output, BinaryOpType op_type)
-  : Communication("reduce_scatter", false) {
+ReduceScatter::ReduceScatter(
+    TensorView* input_tv,
+    TensorView* output_tv,
+    at::Tensor input,
+    at::Tensor output,
+    BinaryOpType op_type)
+    : Communication("reduce_scatter", false) {
   params_.redOp = getC10dReduceOpType(op_type);
-  auto mesh = output_tv->getDeviceMesh();
+  const auto &mesh = output_tv->getDeviceMesh();
   params_.team = mesh.vector();
   params_.dst_bufs = {output};
 
-  int sharded_dim = dimWithParallelType(output_tv, ParallelType::DIDx, true);
+  auto sharded_dim = dimWithParallelType(output_tv, ParallelType::DIDx, true);
   int reduction_dim = dimWithParallelType(input_tv, ParallelType::DIDx);
 
   for (auto i : c10::irange(mesh.vector().size())) {
-    std::vector<at::indexing::TensorIndex> indices(input.dim(), at::indexing::Slice());
-    indices[sharded_dim] = at::indexing::Slice(i, i+1);
-    indices[reduction_dim] = at::indexing::Slice(0,1);
+    std::vector<at::indexing::TensorIndex> indices(
+        input.dim(), at::indexing::Slice());
+    indices[sharded_dim] = at::indexing::Slice(i, i + 1);
+    indices[reduction_dim] = at::indexing::Slice(0, 1);
     auto x = input.index(indices).squeeze(sharded_dim).contiguous();
     params_.src_bufs.push_back(x);
   }
@@ -612,11 +657,17 @@ SendRecv::SendRecv(CommParams params) : Communication(params, "send/recv") {
   validateParams();
 }
 
-SendRecv::SendRecv(TensorView* input_tv, TensorView* output_tv, at::Tensor input, at::Tensor output,
-  DeviceIdxType my_device_index, DeviceIdxType root, DeviceIdxType receiver)
+SendRecv::SendRecv(
+    TensorView* input_tv,
+    TensorView* output_tv,
+    at::Tensor input,
+    at::Tensor output,
+    DeviceIdxType my_device_index,
+    DeviceIdxType root,
+    DeviceIdxType receiver)
     : Communication("send/recv") {
   params_.root = root;
-  auto mesh = DeviceMesh({receiver});
+  const auto &mesh = DeviceMesh({receiver});
   params_.team = mesh.vector();
   if (!mesh.has(root)) {
     params_.team.push_back(root);

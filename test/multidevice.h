@@ -52,7 +52,7 @@ class MultiDeviceTest : public NVFuserTest {
       TensorView* tv,
       DeviceIdxType deviceId) {
     if (isSharded(tv)) {
-      int sharded_dim = dimWithParallelType(tv, ParallelType::DIDx);
+      auto sharded_dim = dimWithParallelType(tv, ParallelType::DIDx);
       int i = 0;
       auto devices = tv->getDeviceMesh().vector();
       auto it = std::find(devices.begin(), devices.end(), deviceId);
