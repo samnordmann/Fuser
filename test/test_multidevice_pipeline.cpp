@@ -668,6 +668,114 @@ TEST_F(PipelineTest, matmul_megatron_attention) {
   testValidate(
       runtime.fusion(), outputs, inputs, expected_outputs, __LINE__, __FILE__);
 }
+
+// option = is output sharded
+class DistributedMatmul
+    : public PipelineTest,
+      public ::testing::WithParamInterface<bool> {};
+
+TEST_P(DistributedMatmul, TNLayout) {
+  // MMALayout::TN matmul A(T), B(N), C(T)
+  // Sharding outer-most axis
+  //  A     B     C   |   Comms
+  //  t     f     t   |   none
+  //  t     f     f   |   allgather
+  auto is_output_sharded = GetParam();
+  FusionGuard fg(fusion.get());
+  int num_devices = communicator->size();
+  std::vector<int64_t> devices(num_devices);
+  std::iota(devices.begin(), devices.end(), 0);
+  DeviceMesh mesh(devices);
+
+  int64_t M = num_devices;
+  int64_t N = 8;
+  int64_t K = 12;
+  std::vector<int64_t> a_shape = {M, K};
+  std::vector<int64_t> b_shape = {N, K};
+
+  // MMALayout::TN matmul
+  TensorView* a = makeConcreteTensor(a_shape); // (M,K)
+  TensorView* b = makeConcreteTensor(b_shape); // (N,K)
+  TensorView* a_b = broadcast(a, {false, true, false}); // (M,b,K)
+  TensorView* b_b = broadcast(b, {true, false, false}); // (b,N,K)
+  TensorView* ab = mul(a_b, b_b); // (M,N,K)
+  TensorView* c = sum(ab, {2}); // (M,N,r) 
+
+  fusion->addInput(a);
+  fusion->addInput(b);
+  fusion->addOutput(c);
+
+  // Sharding M dimension 
+  auto all_sharded_tvs = {a, a_b, b_b, ab};
+  for (auto tv : all_sharded_tvs) {
+    tv->axis(0)->parallelize(ParallelType::DIDx);
+    tv->setDeviceMesh(mesh);
+  }
+  b->setDeviceMesh(mesh);
+  c->setDeviceMesh(mesh);
+  if (is_output_sharded) {
+    c->axis(0)->parallelize(ParallelType::DIDx);
+  }
+
+  unsharded_inputs = {
+      at::randn(a_shape, tensor_options),
+      at::randn(b_shape, tensor_options)};
+  executeAndValidate();
+}
+
+TEST_P(DistributedMatmul, LayoutNT) {
+  // MMALayout::TN matmul A(N), B(T), C(T)
+  // Sharding outer-most axis
+  //  A     B     C   |   Comms
+  //  t     t     t   |   reduce-scatter
+  //  t     t     f   |   allreduce
+  auto is_output_sharded = GetParam();
+  FusionGuard fg(fusion.get());
+  int num_devices = communicator->size();
+  std::vector<int64_t> devices(num_devices);
+  std::iota(devices.begin(), devices.end(), 0);
+  DeviceMesh mesh(devices);
+
+  int64_t M = num_devices;
+  int64_t N = 8;
+  int64_t K = num_devices;
+  std::vector<int64_t> a_shape = {K, M};
+  std::vector<int64_t> b_shape = {K, N};
+
+  // MMALayout::NT matmul
+  TensorView* a = makeConcreteTensor(a_shape); // (K,M)
+  TensorView* b = makeConcreteTensor(b_shape); // (K,N)
+  TensorView* a_b = broadcast(a, {false, false, true}); // (K,M,b)
+  TensorView* b_b = broadcast(b, {false, true, false}); // (K,b,N)
+  TensorView* ab = mul(a_b, b_b); // (K,M,N)
+  TensorView* c = sum(ab, {0}); // (r,M,N)
+
+  fusion->addInput(a);
+  fusion->addInput(b);
+  fusion->addOutput(c);
+
+  // Sharding K dimension 
+  auto all_sharded_tvs = {a, b, a_b, b_b, ab};
+  for (auto tv : all_sharded_tvs) {
+    tv->axis(0)->parallelize(ParallelType::DIDx);
+    tv->setDeviceMesh(mesh);
+  }
+  c->setDeviceMesh(mesh);
+  if (is_output_sharded) {
+    c->axis(1)->parallelize(ParallelType::DIDx);
+  }
+
+  unsharded_inputs = {
+      at::randn(a_shape, tensor_options),
+      at::randn(b_shape, tensor_options)};
+  executeAndValidate();
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    OutputShardings,
+    DistributedMatmul,
+    ::testing::Values(true, false));
+
 } // namespace nvfuser
 
 #endif
