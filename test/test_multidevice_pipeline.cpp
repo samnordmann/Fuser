@@ -25,6 +25,7 @@
 #include <kernel_cache.h>
 #include <kernel_ir.h>
 #include <mma_type.h>
+#include <multidevice/utils.h>
 #include <ops/all_ops.h>
 #include <root_domain_map.h>
 #include <scheduler/all_schedulers.h>
@@ -393,7 +394,7 @@ TensorView* MatrixMultiplication(TensorView* a, TensorView* b) {
   return d;
 }
 
-TEST_F(PipelineTest, matmul_summa) {
+TEST_F(PipelineTest, matmul_suMma) {
   // use NMK for matrix dimensions instead (by convention)
   if (communicator->deviceId()) {
     return;
@@ -670,12 +671,11 @@ TEST_F(PipelineTest, matmul_megatron_attention) {
 }
 
 // option = is output sharded
-class DistributedMatmul
-    : public PipelineTest,
-      public ::testing::WithParamInterface<bool> {};
+class DistributedMatmul : public PipelineTest,
+                          public ::testing::WithParamInterface<bool> {};
 
-TEST_P(DistributedMatmul, TNLayout) {
-  // MMALayout::TN matmul A(T), B(N), C(T)
+TEST_P(DistributedMatmul, LayoutTN) {
+  // MmaLayout::TN matmul A(T), B(N), C(T)
   // Sharding outer-most axis
   //  A     B     C   |   Comms
   //  t     f     t   |   none
@@ -693,19 +693,19 @@ TEST_P(DistributedMatmul, TNLayout) {
   std::vector<int64_t> a_shape = {M, K};
   std::vector<int64_t> b_shape = {N, K};
 
-  // MMALayout::TN matmul
+  // MmaLayout::TN matmul
   TensorView* a = makeConcreteTensor(a_shape); // (M,K)
   TensorView* b = makeConcreteTensor(b_shape); // (N,K)
   TensorView* a_b = broadcast(a, {false, true, false}); // (M,b,K)
   TensorView* b_b = broadcast(b, {true, false, false}); // (b,N,K)
   TensorView* ab = mul(a_b, b_b); // (M,N,K)
-  TensorView* c = sum(ab, {2}); // (M,N,r) 
+  TensorView* c = sum(ab, {2}); // (M,N,r)
 
   fusion->addInput(a);
   fusion->addInput(b);
   fusion->addOutput(c);
 
-  // Sharding M dimension 
+  // Sharding M dimension
   auto all_sharded_tvs = {a, a_b, b_b, ab};
   for (auto tv : all_sharded_tvs) {
     tv->axis(0)->parallelize(ParallelType::DIDx);
@@ -716,15 +716,28 @@ TEST_P(DistributedMatmul, TNLayout) {
   if (is_output_sharded) {
     c->axis(0)->parallelize(ParallelType::DIDx);
   }
+  insertReshardings(fusion.get());
 
-  unsharded_inputs = {
-      at::randn(a_shape, tensor_options),
-      at::randn(b_shape, tensor_options)};
-  executeAndValidate();
+  // unsharded_inputs = {
+  //     at::randn(a_shape, tensor_options),
+  //     at::randn(b_shape, tensor_options)};
+  // executeAndValidate();
+
+  auto a_ = at::randn(a_shape, tensor_options);
+  auto b_ = at::randn(b_shape, tensor_options);
+  auto c_ = at::matmul(a_, b_.transpose(0, 1));
+
+  inputs = {shardTensor(a_, mesh, communicator->deviceId()), b_};
+  auto expected_output =
+      is_output_sharded ? shardTensor(c_, mesh, communicator->deviceId()) : c_;
+  MultiDeviceExecutor runtime(std::move(fusion), *communicator);
+  auto outputs = runtime.runWithInput(inputs);
+  testValidate(
+      runtime.fusion(), outputs, inputs, {expected_output}, __LINE__, __FILE__);
 }
 
 TEST_P(DistributedMatmul, LayoutNT) {
-  // MMALayout::TN matmul A(N), B(T), C(T)
+  // MmaLayout::NT matmul A(N), B(T), C(T)
   // Sharding outer-most axis
   //  A     B     C   |   Comms
   //  t     t     t   |   reduce-scatter
@@ -742,7 +755,7 @@ TEST_P(DistributedMatmul, LayoutNT) {
   std::vector<int64_t> a_shape = {K, M};
   std::vector<int64_t> b_shape = {K, N};
 
-  // MMALayout::NT matmul
+  // MmaLayout::NT matmul
   TensorView* a = makeConcreteTensor(a_shape); // (K,M)
   TensorView* b = makeConcreteTensor(b_shape); // (K,N)
   TensorView* a_b = broadcast(a, {false, false, true}); // (K,M,b)
@@ -754,7 +767,7 @@ TEST_P(DistributedMatmul, LayoutNT) {
   fusion->addInput(b);
   fusion->addOutput(c);
 
-  // Sharding K dimension 
+  // Sharding K dimension
   auto all_sharded_tvs = {a, b, a_b, b_b, ab};
   for (auto tv : all_sharded_tvs) {
     tv->axis(0)->parallelize(ParallelType::DIDx);
@@ -765,10 +778,24 @@ TEST_P(DistributedMatmul, LayoutNT) {
     c->axis(1)->parallelize(ParallelType::DIDx);
   }
 
-  unsharded_inputs = {
-      at::randn(a_shape, tensor_options),
-      at::randn(b_shape, tensor_options)};
-  executeAndValidate();
+  // unsharded_inputs = {
+  //     at::randn(a_shape, tensor_options),
+  //     at::randn(b_shape, tensor_options)};
+  // executeAndValidate();
+
+  auto a_ = at::randn(a_shape, tensor_options);
+  auto b_ = at::randn(b_shape, tensor_options);
+  auto c_ = at::matmul(a_.transpose(0, 1), b_);
+
+  inputs = {
+      shardTensor(a_, mesh, communicator->deviceId()),
+      shardTensor(b_, mesh, communicator->deviceId())};
+  auto expected_output =
+      is_output_sharded ? shardTensor(c_, mesh, communicator->deviceId()) : c_;
+  MultiDeviceExecutor runtime(std::move(fusion), *communicator);
+  auto outputs = runtime.runWithInput(inputs);
+  testValidate(
+      runtime.fusion(), outputs, inputs, {expected_output}, __LINE__, __FILE__);
 }
 
 INSTANTIATE_TEST_SUITE_P(

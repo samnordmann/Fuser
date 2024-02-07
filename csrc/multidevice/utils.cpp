@@ -108,10 +108,12 @@ bool isResharding(Expr* expr) {
 namespace {
 
 void shardAllLike(TensorView* ref, std::vector<TensorView*> tvs) {
-  for (auto tv : tvs) {
-    tv->setDeviceMesh(ref->getDeviceMesh());
+  if (tvs.size() > 0) {
+    for (auto tv : tvs) {
+      tv->setDeviceMesh(ref->getDeviceMesh());
+    }
+    scheduler_utils::parallelizeAllLike(ref, tvs, {ParallelType::DIDx});
   }
-  scheduler_utils::parallelizeAllLike(ref, tvs, {ParallelType::DIDx});
 }
 
 } // namespace
