@@ -108,7 +108,7 @@ bool isResharding(Expr* expr) {
 namespace {
 
 void shardAllLike(TensorView* ref, std::vector<TensorView*> tvs) {
-  if (tvs.size() > 0) {
+  if (!tvs.empty()) {
     for (auto tv : tvs) {
       tv->setDeviceMesh(ref->getDeviceMesh());
     }
