@@ -827,9 +827,9 @@ ForLoop::ForLoop(
     DoubleBufferLoopStage double_buffer_loop_stage)
     : Expr(passkey) {
   NVF_ERROR(passkey.ir_container_ != nullptr);
-  NVF_ERROR(
-      passkey.ir_container_->isA<kir::Kernel>(),
-      "IR type only valid for Kernel container.");
+  // NVF_ERROR(
+  //     passkey.ir_container_->isA<kir::Kernel>(),
+  //     "IR type only valid for Kernel container.");
   NVF_ERROR(isIntegralType(index->dtype()));
   addInput(index);
   addInput(iter_domain);

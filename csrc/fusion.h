@@ -438,6 +438,7 @@ class Fusion : public IrContainer {
   using IrContainer::registerExpr;
   using IrContainer::registerVal;
 
+ public:
   //! Register the Val with this fusion
   void registerVal(Val* val) override;
 
@@ -449,6 +450,7 @@ class Fusion : public IrContainer {
   //! definitions.
   void registerExpr(Expr* expr) override;
 
+ protected:
   //! Clear Expr's from TV uses that are not required to produce outputs from
   //! inputs. Only other place this is used (other than Fusion) is in
   //! Val::uses()
