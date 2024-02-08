@@ -28,6 +28,7 @@
 #include <multidevice/utils.h>
 #include <ops/all_ops.h>
 #include <root_domain_map.h>
+#include <scheduler/mma_utils.h>
 #include <scheduler/all_schedulers.h>
 #include <scheduler/reduction_utils.h>
 #include <scheduler/utils.h>
@@ -688,8 +689,8 @@ TEST_P(DistributedMatmul, LayoutTN) {
   DeviceMesh mesh(devices);
 
   int64_t M = num_devices;
-  int64_t N = 8;
-  int64_t K = 12;
+  int64_t N = 4;
+  int64_t K = 16;
   std::vector<int64_t> a_shape = {M, K};
   std::vector<int64_t> b_shape = {N, K};
 
@@ -802,6 +803,37 @@ INSTANTIATE_TEST_SUITE_P(
     OutputShardings,
     DistributedMatmul,
     ::testing::Values(true, false));
+
+TEST(NVFuserTest, MatmulTN) {
+  auto fusion = std::make_unique<Fusion>();
+  FusionGuard fg(fusion.get());
+
+  int64_t M = 32;
+  int64_t N = 32;
+  int64_t K = 32;
+  std::vector<int64_t> a_shape = {M, K};
+  std::vector<int64_t> b_shape = {N, K};
+
+  // MmaLayout::TN matmul
+  TensorView* a = makeContigTensor(2, PrimDataType::Half); // (M,K)
+  TensorView* b = makeContigTensor(2, PrimDataType::Half); // (N,K)
+  TensorView* a_b = broadcast(a, {false, true, false}); // (M,b,K)
+  TensorView* b_b = broadcast(b, {true, false, false}); // (b,N,K)
+  TensorView* ab = mul(a_b, b_b); // (M,N,K)
+  TensorView* c = sum(ab, {2}); // (M,N,r)
+
+  fusion->addInput(a);
+  fusion->addInput(b);
+  fusion->addOutput(c);
+
+  auto a_ = at::randn(a_shape,  at::TensorOptions().dtype(at::kHalf).device(at::kCUDA));
+  auto b_ = at::randn(b_shape,  at::TensorOptions().dtype(at::kHalf).device(at::kCUDA));
+  auto c_ = at::matmul(a_, b_.transpose(0, 1)).to(at::kFloat);
+
+  FusionExecutorCache executor_cache(std::move(fusion));
+  auto outputs = executor_cache.runFusionWithInputs({a_, b_});
+  NVF_CHECK(outputs[0].allclose(c_, .001, .001));
+}
 
 } // namespace nvfuser
 
