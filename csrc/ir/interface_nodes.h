@@ -537,7 +537,7 @@ class TensorView : public Val {
   }
 
   const DeviceMesh& getDeviceMesh() const {
-    NVF_ERROR(hasDeviceMesh(), "DeviceMesh is not initialized");
+    NVF_ERROR(hasDeviceMesh(), "DeviceMesh is not initialized in tensor ", toString());
     return mesh_;
   }
 
