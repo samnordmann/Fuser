@@ -13,7 +13,7 @@
 #include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
 #include <torch/csrc/distributed/c10d/Store.hpp>
 #include <torch/csrc/distributed/c10d/TCPStore.hpp>
-
+#include <iostream>
 namespace nvfuser {
 
 /*
@@ -50,6 +50,10 @@ class Communicator {
   Communicator(
       CommunicatorBackend backend = comm_backend_default,
       RankType server_local_rank = comm_server_local_rank_default);
+
+  ~Communicator() {
+    std::cout << "Communicator tear down" << std::endl;
+  }
 
   Communicator(const Communicator&) = delete;
   Communicator& operator=(const Communicator&) = delete;

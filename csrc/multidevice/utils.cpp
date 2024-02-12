@@ -133,17 +133,41 @@ void insertReshardings(Fusion* fusion) {
         "multi-output expressions are not supported");
     auto output = expr->outputs().at(0)->as<TensorView>();
     std::vector<TensorView*> new_inputs;
-    for (auto input : getTvsWithDifferentSharding(
-             output, ir_utils::filterByType<TensorView>(expr->inputs()))) {
-      // TODO: reuse cacheAfter?
-      // TODO: here we should add a mechanism to potentially reuse the inserted
-      // resharding accross all the consumer of the resharded tensor. This way
-      // we could avoid wasteful resharding set insertion.
-      TensorView* new_input = set(input);
-      new_inputs.push_back(new_input);
-      expr = ir_utils::replaceValInExprInputs(expr, input, new_input);
+
+    auto inputs = getTvsWithDifferentSharding(output, ir_utils::filterByType<TensorView>(expr->inputs()));
+    // if number of inputs is 1 insert the set after expr
+    // input (expr) intermediate (set) output
+    if (inputs.size() == 1) {
+      auto input = *inputs.begin();
+      // Create new_output and update output's consumers to use new_output 
+      TensorView* new_output = set(output);
+      for (auto use_of_old_val : output->uses()) {
+        ir_utils::replaceValInExprInputs(use_of_old_val, output, new_output);
+      }
+      // if output is a fusion's output, update it to new_output
+      auto fusion_outputs = fusion->outputs();
+      auto it = std::find(fusion_outputs.begin(), fusion_outputs.end(), output);
+      if (it != fusion_outputs.end()) {
+        fusion->removeOutput(output);
+        fusion->addOutput(new_output);
+      }
+      // Update shardings new_output takes output's sharding, output takes input's sharding
+      shardAllLike(output, {new_output});
+      shardAllLike(input, {output});
+    } else {
+      // if number of inputs is > 1 insert the set before the expr
+      // inputs (expr) new inputs (set) output
+      for (auto input : inputs) {
+        // TODO: reuse cacheAfter?
+        // TODO: here we should add a mechanism to potentially reuse the inserted
+        // resharding accross all the consumer of the resharded tensor. This way
+        // we could avoid wasteful resharding set insertion.
+        TensorView* new_input = set(input);
+        new_inputs.push_back(new_input);
+        expr = ir_utils::replaceValInExprInputs(expr, input, new_input);
+      }
+      shardAllLike(output, new_inputs);
     }
-    shardAllLike(output, new_inputs);
   }
 }
 
