@@ -105,7 +105,8 @@ MultiDeviceExecutor::MultiDeviceExecutor(
       .run_final_merge = true,
       .only_segment_resharding_exprs = true};
 
-  staged_fusion_ = SegmentCandidateFinder::segment(std::move(fusion), nullptr, options);
+  staged_fusion_ =
+      SegmentCandidateFinder::segment(std::move(fusion), nullptr, options);
 
   for (auto group : staged_fusion_->groups()) {
     NVF_ERROR(!group->exprs().empty() == 1, "invalid segmentation");
