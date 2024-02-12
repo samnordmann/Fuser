@@ -9,7 +9,6 @@
 #pragma once
 
 #include <multidevice/multidevice.h>
-#include <multidevice/pipeline.h>
 #include <multidevice/pipeline_ir.h>
 
 namespace nvfuser {

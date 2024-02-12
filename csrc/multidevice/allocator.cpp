@@ -59,7 +59,7 @@ std::unordered_map<Val*, c10::IValue> allocatePipelineIntermediateBuffers(
     DeviceIdxType my_device_index,
     std::vector<c10::IValue> global_inputs_IValues) {
   // Stores the Vals that needs to be allocated
-  std::unordered_set<Val*> vals_to_allocate;
+  std::unordered_set<Val*> vals_to_allocate();
   // Add all the input of stages run by the current device
   const auto& exprs = pipeline->exprs();
   for (auto stage : ir_utils::filterByType<PipelineStage>(exprs)) {
@@ -96,7 +96,7 @@ std::unordered_map<Val*, c10::IValue> allocatePipelineIntermediateBuffers(
   auto allocated_tensors = fe.allocOutputSpace(global_inputs_IValues);
 
   // Stores the returned result
-  std::unordered_map<Val*, c10::IValue> allocations;
+  std::unordered_map<Val*, c10::IValue> allocations();
   // Map each symbolic tensor to its allocated buffer
   for (auto i : c10::irange(allocated_tensors.size())) {
     allocations.emplace(
