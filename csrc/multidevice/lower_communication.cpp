@@ -555,7 +555,7 @@ bool isLowerableToCommunication(Expr* expr) {
 
 namespace nvfuser {
 
-// This is just here so that things can compile even when/if USE_DISTRIBUTED is
+// This is just here so that things can compile even when/if NVFUSER_DISTRIBUTED is
 // not defined. The code paths aren't intended to be hit ever in such cases, so
 // the implementation is unimportant.
 bool isLowerableToCommunication(Expr*) {
