@@ -15,6 +15,7 @@
 #include <multidevice/communication.h>
 #include <multidevice/communicator.h>
 #include <multidevice/multidevice.h>
+#include <mma_type.h>
 
 namespace nvfuser {
 
@@ -27,7 +28,8 @@ class MultiDeviceExecutor {
   MultiDeviceExecutor(std::unique_ptr<Fusion> fusion, Communicator& comm);
 
   // Run the fusion on several devices with the given global inputs
-  std::vector<at::Tensor> runWithInput(const std::vector<c10::IValue>& inputs);
+  // use_aten_matmul flag bypass nvfuser matmul kernels for aten kernels.
+  std::vector<at::Tensor> runWithInput(const std::vector<c10::IValue>& inputs, bool use_aten_matmul=false, MmaLayout layout=MmaLayout::TN);
 
   // Returns the Communicator
   Communicator* comm() const {
@@ -46,7 +48,7 @@ class MultiDeviceExecutor {
  private:
   // execute locally a SegmentedGroup that does not involve inter-device
   // communication
-  void postKernel(SegmentedGroup* group);
+  void postKernel(SegmentedGroup* group, bool use_aten_matmul, MmaLayout layout);
   // execute a SegmentedGroup representing inter-device communication
   void postCommunication(SegmentedGroup* group);
 

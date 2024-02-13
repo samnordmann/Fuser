@@ -125,7 +125,7 @@ MultiDeviceExecutor::MultiDeviceExecutor(
   group_run_order_ = std::move(workspace.group_run_order);
 }
 
-void MultiDeviceExecutor::postKernel(SegmentedGroup* group) {
+void MultiDeviceExecutor::postKernel(SegmentedGroup* group, bool use_aten_matmul, MmaLayout layout) {
   if (!should_run_.at(group)) {
     return;
   }
@@ -146,15 +146,34 @@ void MultiDeviceExecutor::postKernel(SegmentedGroup* group) {
 
   // placeholder for storing the group's outputs
   std::vector<at::Tensor> outputs;
-
-  // Compile the group and execute it with FusionExecutor
-  // Check if the executor has been cached. If not, create and cache it
-  if (fe_.find(group) == fe_.end()) {
-    fe_.emplace(group, std::make_unique<FusionExecutor>());
-    fusions_.emplace(group, staged_fusion_->makeFusion(group));
-    fe_[group]->compileFusion(fusions_.at(group).get(), group_input_IValues);
+  if (use_aten_matmul) {
+    // Validity check to use aten for compute instead of nvfuser.
+    std::cout << "Bypassing nvfuser to use aten matmul" << std::endl;
+    std::vector<at::Tensor> inputs;
+    for (auto val : group_input_IValues) {
+      inputs.push_back(val.toTensor());
+    }
+    at::Tensor a;
+    at::Tensor b;
+    if (layout == MmaLayout::TN) {
+      a = inputs[1];
+      b = inputs[0].transpose(0,1);
+    } else if (layout == MmaLayout::NT) {
+      a = inputs[1].transpose(1,2);
+      b = inputs[0];
+    }
+    auto o = at::matmul(a.to(at::kFloat), b.to(at::kFloat));
+    outputs.push_back(o);
+  } else {
+    // Compile the group and execute it with FusionExecutor
+    // Check if the executor has been cached. If not, create and cache it
+    if (fe_.find(group) == fe_.end()) {
+      fe_.emplace(group, std::make_unique<FusionExecutor>());
+      fusions_.emplace(group, staged_fusion_->makeFusion(group));
+      fe_[group]->compileFusion(fusions_.at(group).get(), group_input_IValues);
+    }
+    outputs = fe_[group]->runFusion(group_input_IValues);
   }
-  outputs = fe_[group]->runFusion(group_input_IValues);
 
   // Store the outputs in the context
   for (auto output_idx : c10::irange(outputs.size())) {
@@ -201,7 +220,7 @@ void MultiDeviceExecutor::postCommunication(SegmentedGroup* group) {
 }
 
 std::vector<at::Tensor> MultiDeviceExecutor::runWithInput(
-    const std::vector<c10::IValue>& inputs) {
+    const std::vector<c10::IValue>& inputs, bool use_aten_matmul, MmaLayout layout) {
   // make sure the communicator can run the Fusion (e.g. there is enough GPUs,
   // etc)
   auto error_msg = validate();
@@ -213,6 +232,9 @@ std::vector<at::Tensor> MultiDeviceExecutor::runWithInput(
       "Wrong number of inputs");
 
   val_to_IValue_ = allocateRecvBuffers(inputs);
+  // Reset communications in case the executor is reused
+  // TODO: communicator caching is storing the old output location.
+  communications_ = {};
 
   // process input values:
   for (auto input_idx : c10::irange(inputs.size())) {
@@ -223,7 +245,7 @@ std::vector<at::Tensor> MultiDeviceExecutor::runWithInput(
   // Run through the groups to launch kernels and comms
   for (auto group : group_run_order_) {
     if (!is_resharding_.at(group)) {
-      postKernel(group);
+      postKernel(group, use_aten_matmul, layout);
     } else {
       postCommunication(group);
     }
@@ -237,7 +259,6 @@ std::vector<at::Tensor> MultiDeviceExecutor::runWithInput(
         : at::Tensor();
     outputs.push_back(output);
   }
-
   return outputs;
 }
 
