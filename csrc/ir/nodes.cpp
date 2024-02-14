@@ -3703,6 +3703,17 @@ std::vector<IterDomain*> TensorDomain::noBroadcasts(
   return noBroadcastDomain;
 }
 
+std::vector<IterDomain*> TensorDomain::noDevices(
+    const std::vector<IterDomain*>& td) {
+  std::vector<IterDomain*> noDeviceDomain;
+  std::copy_if(
+      td.begin(),
+      td.end(),
+      std::back_inserter(noDeviceDomain),
+      [](IterDomain* id) { return !id->isDeviceDim(); });
+  return noDeviceDomain;
+}
+
 /*static*/ std::vector<std::optional<bool>> TensorDomain::
     getContiguityFilledWith(
         const std::vector<IterDomain*>& rfactor_domain,

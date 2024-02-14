@@ -1177,9 +1177,9 @@ MmaOpDetails getMmaOpDetails(
     TensorView* out,
     TensorView* in_a,
     TensorView* in_b) {
-  const auto in_a_details = getDetailsFor(in_a->getMaybeRFactorDomain());
-  const auto in_b_details = getDetailsFor(in_b->getMaybeRFactorDomain());
-  const auto out_details = getDetailsFor(out->getRootDomain());
+  const auto in_a_details = getDetailsFor(TensorDomain::noDevices(in_a->getMaybeRFactorDomain()));
+  const auto in_b_details = getDetailsFor(TensorDomain::noDevices(in_b->getMaybeRFactorDomain()));
+  const auto out_details = getDetailsFor(TensorDomain::noDevices(out->getRootDomain()));
 
   using AxesData = MmaOp::AxesData;
 

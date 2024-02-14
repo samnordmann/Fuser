@@ -1005,7 +1005,7 @@ ProblemIterDomainsOpt getProblemIterDomains(
 
   const auto& leaf_domains = props.out->getLeafDomain();
   const auto concrete =
-      TensorDomain::noReductions(TensorDomain::noBroadcasts(leaf_domains));
+      TensorDomain::noDevices(TensorDomain::noReductions(TensorDomain::noBroadcasts(leaf_domains)));
   if (concrete.size() < MIN_MATMUL_INPUTS_NUMBER) {
     std::stringstream ss;
     ss << "Failed to find the minimum number of MMA input candidates, expected "
@@ -1301,9 +1301,10 @@ void addMMAOp(Fusion* fusion_, std::vector<MulSumProperties>& props) {
 bool hasValidBroadcastOp(TensorView* bcast_out) {
   // First check the tensorsview is 3D (4D)
   // and has one broadcast dim.
-  auto dims = bcast_out->domain()->nDims();
+  // Ignore device dimensions in this analysis.
+  auto dims = bcast_out->domain()->noDevices().size();
   if (!((dims == 3 || dims == 4) &&
-        bcast_out->domain()->noBroadcasts().size() == dims - 1)) {
+        TensorDomain::noDevices(bcast_out->domain()->noBroadcasts()).size() == dims - 1)) {
     return false;
   }
 
@@ -1311,8 +1312,17 @@ bool hasValidBroadcastOp(TensorView* bcast_out) {
   if (dynamic_cast<BroadcastOp*>(bcast_out->definition())) {
     return true;
   }
-
   return false;
+}
+
+int64_t numBroadcastDeviceDims(TensorView* tv) {
+  int64_t num = 0;
+  for (auto id : tv->getMaybeRFactorDomain()) {
+    if (id->isDeviceDim() && id->isBroadcast()) {
+      num += 1;
+    }
+  }
+  return num;
 }
 
 // This function checks if the mul-sum can be replace with a mma op. The checks
@@ -1334,11 +1344,13 @@ bool broadcastsAreValid(
   auto bcast_l = dynamic_cast<BroadcastOp*>(left->definition());
   auto bcast_r = dynamic_cast<BroadcastOp*>(right->definition());
 
-  // Ensure that only one dim is getting broadcast.
+  // Ensure that only one non-device dim is getting broadcast.
   auto bcastFlags_l = bcast_l->getBroadcastDimFlags();
   auto bcastFlags_r = bcast_r->getBroadcastDimFlags();
-  auto count_l = std::count(bcastFlags_l.begin(), bcastFlags_l.end(), true);
-  auto count_r = std::count(bcastFlags_r.begin(), bcastFlags_r.end(), true);
+  auto bcast_l_devices = numBroadcastDeviceDims(left);
+  auto bcast_r_devices = numBroadcastDeviceDims(right);
+  auto count_l = std::count(bcastFlags_l.begin(), bcastFlags_l.end(), true) - bcast_l_devices;
+  auto count_r = std::count(bcastFlags_r.begin(), bcastFlags_r.end(), true) - bcast_r_devices;
   if ((count_l != 1) || (count_l != count_r)) {
     return false;
   }

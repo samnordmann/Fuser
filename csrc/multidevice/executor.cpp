@@ -8,6 +8,7 @@
 #ifdef USE_DISTRIBUTED
 #include <ATen/cuda/CUDAContext.h>
 #include <device_lower/utils.h>
+#include <fusion.h>
 #include <fusion_segmenter.h>
 #include <ir/utils.h>
 #include <multidevice/device_mesh.h>
@@ -167,12 +168,20 @@ void MultiDeviceExecutor::postKernel(SegmentedGroup* group, bool use_aten_matmul
   } else {
     // Compile the group and execute it with FusionExecutor
     // Check if the executor has been cached. If not, create and cache it
-    if (fe_.find(group) == fe_.end()) {
-      fe_.emplace(group, std::make_unique<FusionExecutor>());
-      fusions_.emplace(group, staged_fusion_->makeFusion(group));
-      fe_[group]->compileFusion(fusions_.at(group).get(), group_input_IValues);
-    }
-    outputs = fe_[group]->runFusion(group_input_IValues);
+  //   if (fe_.find(group) == fe_.end()) {
+  //     fe_.emplace(group, std::make_unique<FusionExecutor>());
+  //     fusions_.emplace(group, staged_fusion_->makeFusion(group));
+  //     auto can_use_matmul_scheduler = MatmulScheduler::canScheduleCompileTime(fusions_.at(group).get());
+  //     std::cout << "Can schedule matmul " << can_use_matmul_scheduler << std::endl;
+  //     fe_[group]->compileFusion(fusions_.at(group).get(), group_input_IValues);
+  //   }
+  //   outputs = fe_[group]->runFusion(group_input_IValues);
+    auto fusion = staged_fusion_->makeFusion(group);
+    fusion->print();
+    auto can_use_matmul_scheduler = MatmulScheduler::canScheduleCompileTime(fusion.get());
+    std::cout << "Can schedule matmul " << can_use_matmul_scheduler << std::endl;
+    FusionExecutorCache fec(std::move(fusion));
+    outputs = fec.runFusionWithInputs(group_input_IValues);
   }
 
   // Store the outputs in the context
