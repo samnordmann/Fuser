@@ -8738,6 +8738,27 @@ TEST_F(NVFuserTest, AvoidCachingSliceInput) {
     }
   }
 }
+
+TEST_F(NVFuserTest, staged_reduction_autoschedule) {
+  int A = 2;
+  int B = 8;
+  int C = 16;
+  std::vector<int64_t> unsharded_input_sizes = {A, B, C};
+
+  Fusion fusion;
+  FusionGuard fg(&fusion);
+  TensorView* tv0 = makeConcreteTensor(unsharded_input_sizes);
+  TensorView* tv1 = sum(tv0, {2});
+  TensorView* tv_out = sum(tv1, {0});
+  fusion.addInput(tv0);
+  fusion.addOutput(tv_out);
+
+  auto options = at::TensorOptions().device(at::kCUDA, 0);
+  auto reduction_params = getReductionHeuristics(&fusion, {at::randn(unsharded_input_sizes, options)});
+  NVF_CHECK(reduction_params, "Reduction schedule was not generated!");
+  scheduleReduction(&fusion, *reduction_params);
+
+}
 // Test file size should be up to 10K LoC. Create a new file for more tests.
 
 } // namespace nvfuser
