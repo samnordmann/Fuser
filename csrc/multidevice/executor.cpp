@@ -19,6 +19,15 @@ namespace nvfuser {
 
 namespace {
 
+// auto compare = [](const ParallelType& a, const std::string& b) { return stringifyThreadSize(a) == b; };
+std::unordered_map<ParallelType, int64_t> parallel_dims_extents = {
+  {ParallelType::TIDx, 4},
+  {ParallelType::BIDx, 8}
+};
+// std::unordered_map<ParallelType, int64_t, decltype(compare)> parallel_dims_extents(compare);
+// parallel_dims_extents.insert({ParallelType::TIDx, 4});
+// parallel_dims_extents.insert({ParallelType::BIDx, 8});
+
 std::pair<std::unique_ptr<Fusion>, std::unordered_map<Val*, Val*>>
 copyFusionAndChangeOutputs(Fusion* fusion, std::unordered_set<Val*> outputs) {
   std::unique_ptr<Fusion> fusion_copy = std::make_unique<Fusion>();
@@ -132,11 +141,24 @@ void MultiDeviceExecutor::postKernel(SegmentedGroup* group) {
     return;
   }
 
-  group->input_vals.erase(std::remove_if(
-    group->input_vals.begin(), group->input_vals.end(),
-    [](Val* val) { 
-        return val->isA<NamedScalar>();
-    }), group->input_vals.end());
+  // erase from group's input extent corresponding to grid and block dims. Set them through launchparams.
+  auto l_params = LaunchParams();
+  std::unordered_set<Val*> to_erase;
+  for (auto input: group->inputs()) {
+    if (input->isA<NamedScalar>()) {
+      // auto name = ->name();
+      auto ns = input->as<NamedScalar>();
+      auto parallel_type = ns->getParallelDim();
+      NVF_ERROR(parallel_type.has_value());
+      NVF_ERROR(parallel_dims_extents.count(parallel_type.value()));
+      l_params.bind(parallel_dims_extents[parallel_type.value()], parallel_type.value());
+      to_erase.insert(input);
+    }
+  }
+  group->input_vals.erase(std::remove_if(group->input_vals.begin(),
+                                         group->input_vals.end(),
+                                         [to_erase](auto val){return to_erase.count(val);}),
+                          group->input_vals.end());
 
   // get the IValues corresponding to the group's input
   std::vector<c10::IValue> group_input_IValues;
@@ -158,9 +180,6 @@ void MultiDeviceExecutor::postKernel(SegmentedGroup* group) {
 
   // Compile the group and execute it with FusionExecutor
   // Check if the executor has been cached. If not, create and cache it
-  auto l_params = LaunchParams();
-  l_params.bind(4, ParallelType::TIDx);
-  l_params.bind(8, ParallelType::BIDx);
   if (fe_.find(group) == fe_.end()) {
     fe_.emplace(group, std::make_unique<FusionExecutor>());
     fusions_.emplace(group, staged_fusion_->makeFusion(group));
