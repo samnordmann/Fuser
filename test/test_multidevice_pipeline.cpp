@@ -424,8 +424,10 @@ TEST_P(PipelineTestStagedReduction, staged_reduction) {
   int num_devices = communicator->is_available()? communicator->size() : 2; // for debug
   int A = num_devices;
   int B = 8;
-  int C = 16;
+  int C = 32;
   std::vector<int64_t> unsharded_input_sizes = {A, B, C};
+  std::vector<int64_t> input_sizes(unsharded_input_sizes);
+  input_sizes[0] = 1;
 
   FusionGuard fg(fusion.get());
   TensorView* tv0 = makeConcreteTensor(unsharded_input_sizes);
@@ -435,13 +437,26 @@ TEST_P(PipelineTestStagedReduction, staged_reduction) {
   fusion->addInput(tv0);
   fusion->addOutput(tv_out);
 
+  // multi device scheduling:
+  std::vector<int64_t> devices(num_devices);
+  std::iota(devices.begin(), devices.end(), 0);
+  // if (!num_devices) { // for debug only when run on a non-distributed setting. TODO: remove the "if block"
+  //   devices.push_back(0);
+  // }
+  DeviceMesh mesh(devices);
+  for (auto tv : ir_utils::filterByType<TensorView>(fusion->vals())) {
+    shardOutMostDim(tv);
+    // tv->axis(0)->parallelize(ParallelType::DIDx);
+    tv->setDeviceMesh(mesh);
+  }
+
   // Intra-device reduction scheduling for the first reduction:
   switch (scheduling_mode)
   {
   case SchedulingMode::noScheduling:
     break;
   case SchedulingMode::automaticScheduling: {   
-    auto reduction_params = getReductionHeuristics(fusion.get(), {at::empty(unsharded_input_sizes, tensor_options)});
+    auto reduction_params = getReductionHeuristics(fusion.get(), {at::empty(input_sizes, tensor_options)});
     NVF_CHECK(reduction_params, "Reduction schedule was not generated!");
     scheduleReduction(fusion.get(), *reduction_params);
     auto_schedule = false;
@@ -483,21 +498,9 @@ TEST_P(PipelineTestStagedReduction, staged_reduction) {
   } 
   }
 
-  // multi device scheduling:
-  std::vector<int64_t> devices(num_devices);
-  std::iota(devices.begin(), devices.end(), 0);
-  // if (!num_devices) { // for debug only when run on a non-distributed setting. TODO: remove the "if block"
-  //   devices.push_back(0);
-  // }
-  DeviceMesh mesh(devices);
-  for (auto tv : ir_utils::filterByType<TensorView>(fusion->vals())) {
-    shardOutMostDim(tv);
-    // tv->axis(0)->parallelize(ParallelType::DIDx);
-    tv->setDeviceMesh(mesh);
-  }
 
   // if (!communicator->deviceId()) {
-  //   fusion->print();
+    fusion->print();
   //   fusion->printTransforms();
   //   fusion->printMath();
   //   fusion->printKernel();
