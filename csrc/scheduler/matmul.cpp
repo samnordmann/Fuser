@@ -36,6 +36,7 @@ void MatmulScheduler::schedule(Fusion* fusion) {
 bool MatmulScheduler::canScheduleCompileTime(Fusion* fusion) {
   const auto msg = getMatmulCompileTimeRejectReason(fusion);
   if (!msg.empty()) {
+    std::cout << "Can Schedule failed " << msg << std::endl;
     scheduler_debug_utils::canScheduleRejectReason(heuristicType(), msg);
     return false;
   }
@@ -1007,7 +1008,9 @@ void scheduleMatmul(Fusion* fusion, const MatmulParams& params) {
   // If we only have batch dim, parallelize the batch dim.
   if (num_splitk_dims != 0) {
     mma_result->axis(num_batch_dims + 2)->parallelize(ParallelType::BIDz);
-  } else if (num_batch_dims != 0) {
+  } else if (num_batch_dims != 0 && !mma_result->axis(0)->isDeviceDim()) {
+    // if outermost axis is already parallelized across devices then it's not a batch dim.
+    // do not paralleize on BIDz.
     mma_result->axis(0)->parallelize(ParallelType::BIDz);
   }
   switch (params.cta_order) {

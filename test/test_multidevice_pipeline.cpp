@@ -19,6 +19,7 @@
 #include <ir/all_nodes.h>
 #include <ir/graphviz.h>
 #include <ir/iostream.h>
+#include <ir/interface_nodes.h>
 #include <ir/printer.h>
 #include <ir/utils.h>
 #include <iter_visitor.h>
@@ -675,7 +676,6 @@ TEST_F(PipelineTest, matmul_megatron_attention) {
 class DistributedMatmul : public PipelineTest,
                           public ::testing::WithParamInterface<bool> {};
 
-
 TEST_P(DistributedMatmul, LayoutTN) {
   // MmaLayout::TN matmul A(T), B(N), C(T)
   // Sharding outer-most axis
@@ -689,9 +689,7 @@ TEST_P(DistributedMatmul, LayoutTN) {
   std::iota(devices.begin(), devices.end(), 0);
   DeviceMesh mesh(devices);
 
-  int64_t M = 24;
-  int64_t N = 8;
-  int64_t K = 16;
+  int64_t M = 64, N = 32, K = 64;
   // TODO: until we support split, manually split axes
   int64_t Mo = num_devices;
   int64_t Mi = M / Mo;
@@ -699,8 +697,8 @@ TEST_P(DistributedMatmul, LayoutTN) {
   std::vector<int64_t> b_shape = {N, K};
 
   // MmaLayout::TN matmul
-  TensorView* a = makeConcreteTensor(a_shape, DataType::Half); // (Mo, Mi, K)
-  TensorView* b = makeConcreteTensor(b_shape, DataType::Half); // (N,K)
+  TensorView* a = makeContigConcreteTensor(a_shape, DataType::Half); // (Mo, Mi, K)
+  TensorView* b = makeContigConcreteTensor(b_shape, DataType::Half); // (N,K)
   TensorView* a_b = broadcast(a, {false, false, true, false}); // (Mo,Mi,b,K)
   TensorView* b_b = broadcast(b, {true, true, false, false}); // (b,b,N,K)
   TensorView* ab = mul(a_b, b_b); // (Mo,Mi,N,K)
@@ -723,15 +721,10 @@ TEST_P(DistributedMatmul, LayoutTN) {
   }
   insertReshardings(fusion.get());
 
-  // unsharded_inputs = {
-  //     at::randn(a_shape, tensor_options),
-  //     at::randn(b_shape, tensor_options)};
-  // executeAndValidate();
-
   auto tensor_options =
       at::TensorOptions().dtype(at::kHalf).device(communicator->device());
-  auto a_ = at::randn(a_shape, tensor_options)*10;
-  auto b_ = at::randn(b_shape, tensor_options)*10;
+  auto a_ = at::randn(a_shape, tensor_options);
+  auto b_ = at::randn(b_shape, tensor_options);
   auto c_ = at::matmul(a_.view({M, K}).to(at::kFloat), b_.transpose(0, 1).to(at::kFloat)).view({Mo, Mi, N});
 
   inputs = {shardTensor(a_, mesh, communicator->deviceId()), b_};
@@ -739,38 +732,38 @@ TEST_P(DistributedMatmul, LayoutTN) {
       is_output_sharded ? shardTensor(c_, mesh, communicator->deviceId()) : c_;
   MultiDeviceExecutor runtime(std::move(fusion), *communicator);
   auto outputs = runtime.runWithInput(inputs);
-  // auto aten_outputs = runtime.runWithInput(inputs, true);
-  // testValidate(
-  //     runtime.fusion(), outputs, inputs, aten_outputs, __LINE__, __FILE__);
-
+  auto aten_outputs = runtime.runWithInput(inputs, true);
+  testValidate(
+      runtime.fusion(), outputs, inputs, aten_outputs, __LINE__, __FILE__);
 }
 
-TEST_P(DistributedMatmul, LayoutNT) {
+INSTANTIATE_TEST_SUITE_P(
+    NoComms,
+    DistributedMatmul,
+    ::testing::Values(true));
+INSTANTIATE_TEST_SUITE_P(
+    AllGather,
+    DistributedMatmul,
+    ::testing::Values(false));
+
+TEST_F(PipelineTest, MatmulNT_AllReduce) {
   // MmaLayout::NT matmul A(N), B(T), C(T)
-  // Sharding outer-most axis
-  //  A     B     C   |   Comms
-  //  t     t     t   |   reduce-scatter
-  //  t     t     f   |   allreduce
-  auto is_output_sharded = GetParam();
+  // Sharding: A, B are sharded along K. C is replicated.
   FusionGuard fg(fusion.get());
   int num_devices = communicator->size();
   std::vector<int64_t> devices(num_devices);
   std::iota(devices.begin(), devices.end(), 0);
   DeviceMesh mesh(devices);
 
-  // TODO: split
-  int64_t M = num_devices;
-  int64_t N = 8;
-  int64_t K = 24;
-  int64_t Ko = num_devices;
-  int64_t Ki = K / Ko;
+  // Note: Manually split K into Ko(device dim), Ki until split supported.
+  int64_t M = 64, N = 32, K = 64;
+  int64_t Ko = num_devices, Ki = K / Ko;
   std::vector<int64_t> a_shape = {Ko,Ki,M};
   std::vector<int64_t> b_shape = {Ko,Ki,N};
 
-  // MmaLayout::NT matmul
-  TensorView* a = makeConcreteTensor(a_shape, DataType::Half); // (Ko,Ki,M)
-  TensorView* b = makeConcreteTensor(b_shape, DataType::Half); // (Ko,Ki,N)
-  // Transpose into TN layout, ignoring Ko which is sharded.
+  TensorView* a = makeContigConcreteTensor(a_shape, DataType::Half); // (Ko,Ki,M)
+  TensorView* b = makeContigConcreteTensor(b_shape, DataType::Half); // (Ko,Ki,N)
+  // Transpose into TN layout, keep Ko (device axis) as the outermost.
   TensorView* a_t = transpose(a, 1, 2); // (Ko, M, Ki)
   TensorView* b_t = transpose(b, 1, 2); // (Ko, N, Ki)
   TensorView* a_b = broadcast(a_t, {false, false, true, false}); // (Ko,M,b,Ki)
@@ -779,89 +772,104 @@ TEST_P(DistributedMatmul, LayoutNT) {
   TensorView* c0 = sum(ab, {-1}); // (Ko,M,N,r)
   TensorView* c = sum(c0, {0}); // (r,M,N)
   
+  // For architectures with NT support
   // TensorView* a_b = broadcast(a, {false, false, false, true}); // (Ko,Ki,M,b)
   // TensorView* b_b = broadcast(b, {false, false, true, false}); // (Ko,Ki,b,N)
   // TensorView* ab = mul(a_b, b_b); // (Ko,Ki,M,N)
   // TensorView* c0 = sum(ab, {1}); // (Ko,r,M,N)
   // TensorView* c = sum(c0, {0}); // (r,M,N)
-
   fusion->addInput(a);
   fusion->addInput(b);
   fusion->addOutput(c);
 
-  // Sharding K dimension
+  // Parallelize K on all inputs and intermediates.
   auto all_sharded_tvs = {a, b, a_t, b_t, a_b, b_b, ab, c0};
   for (auto tv : all_sharded_tvs) {
     tv->axis(0)->parallelize(ParallelType::DIDx);
     tv->setDeviceMesh(mesh);
   }
+  // output is replicated on all devices. 
   c->setDeviceMesh(mesh);
-  if (is_output_sharded) {
-    c->axis(1)->parallelize(ParallelType::DIDx);
-  }
   insertReshardings(fusion.get());
-
-  // unsharded_inputs = {
-  //     at::randn(a_shape, tensor_options),
-  //     at::randn(b_shape, tensor_options)};
-  // executeAndValidate();
 
   auto tensor_options =
       at::TensorOptions().dtype(at::kHalf).device(communicator->device());
   auto a_ = at::randn(a_shape, tensor_options)*10;
   auto b_ = at::randn(b_shape, tensor_options)*10;
-  auto c_ = at::matmul(a_.view({K,M}).transpose(0, 1), b_.view({K,N})).view({M,N}).to(at::kFloat);
+  // auto c_ = at::matmul(a_.view({K,M}).transpose(0, 1), b_.view({K,N})).view({M,N}).to(at::kFloat);
 
   inputs = {
       shardTensor(a_, mesh, communicator->deviceId()),
       shardTensor(b_, mesh, communicator->deviceId())};
-  auto expected_output =
-      is_output_sharded ? shardTensor(c_, mesh, communicator->deviceId()) : c_;
+
   MultiDeviceExecutor runtime(std::move(fusion), *communicator);
-  // auto aten_outputs = runtime.runWithInput(inputs, true, MmaLayout::NT);
   auto outputs = runtime.runWithInput(inputs);
-  // testValidate(
-  //     runtime.fusion(), outputs, inputs, aten_outputs, __LINE__, __FILE__);
+  auto aten_outputs = runtime.runWithInput(inputs, true, MmaLayout::NT);
+  testValidate(
+      runtime.fusion(), outputs, inputs, aten_outputs, __LINE__, __FILE__);
 }
 
-INSTANTIATE_TEST_SUITE_P(
-    OutputShardings,
-    DistributedMatmul,
-    ::testing::Values(true, false));
-
-TEST(NVFuserTest, MatmulTN) {
-  auto fusion = std::make_unique<Fusion>();
+TEST_F(PipelineTest, MatmulNT_ReduceScatter) {
+  // MmaLayout::NT matmul A(N), B(T), C(T)
+  // A, B are sharded on K. C is sharded on M
   FusionGuard fg(fusion.get());
+  int num_devices = communicator->size();
+  std::vector<int64_t> devices(num_devices);
+  std::iota(devices.begin(), devices.end(), 0);
+  DeviceMesh mesh(devices);
 
-  int64_t M = 32;
-  int64_t N = 32;
-  int64_t K = 32;
-  std::vector<int64_t> a_shape = {M, K};
-  std::vector<int64_t> b_shape = {N, K};
+  // Note: Manually split K and M
+  int64_t M = 64, N = 32, K = 64;
+  int64_t Ko = num_devices, Ki = K / Ko;
+  int64_t Mo = num_devices, Mi = M / Mo;
+  std::vector<int64_t> a_shape = {Ko,Ki,M};
+  std::vector<int64_t> b_shape = {Ko,Ki,N};
 
-  // MmaLayout::TN matmul
-  // TODO: C++ exception with description "Not supported byte size for cp.async.cg
-  // Exception raised from validateSizeMemoryOp at /home/mcowan/Fuser/csrc/device_lower/validation.cpp:995 (most recent call first):
-  TensorView* a = makeContigTensor(2, PrimDataType::Half); // (M,K)
-  TensorView* b = makeContigTensor(2, PrimDataType::Half); // (N,K)
-  TensorView* a_b = broadcast(a, {false, true, false}); // (M,b,K)
-  TensorView* b_b = broadcast(b, {true, false, false}); // (b,N,K)
-  TensorView* ab = mul(a_b, b_b); // (M,N,K)
-  TensorView* c = sum(ab, {2}); // (M,N,r)
+  TensorView* a = makeContigConcreteTensor(a_shape, DataType::Half); // (Ko,Ki,M)
+  TensorView* b = makeContigConcreteTensor(b_shape, DataType::Half); // (Ko,Ki,N)
+  TensorView* a_t = transpose(a, 1, 2); // (Ko, M, Ki)
+  TensorView* b_t = transpose(b, 1, 2); // (Ko, N, Ki)
+  TensorView* a_b = broadcast(a_t, {false, false, true, false}); // (Ko,M,b,Ki)
+  TensorView* b_b = broadcast(b_t, {false, true, false, false}); // (Ko,b,N,Ki)
+  TensorView* ab = mul(a_b, b_b); // (Ko,M,N,Ki)
+  TensorView* c0 = sum(ab, {-1}); // (Ko,M,N,r)
+  std::vector<int64_t> orig_size = {Ko,M,N};
+  std::vector<int64_t> new_size = {Ko,Mo,Mi,N};
+  TensorView* c1 = reshape(c0, orig_size, new_size); // (Ko,Mo,Mi,N)
+  TensorView* c = sum(c1, {0}); // (r,Mo,Mi,N)
 
   fusion->addInput(a);
   fusion->addInput(b);
   fusion->addOutput(c);
 
-  auto tensor_options =
-      at::TensorOptions().dtype(at::kHalf).device(at::kCUDA);
-  auto a_ = at::randn(a_shape,  tensor_options);
-  auto b_ = at::randn(b_shape,  tensor_options);
-  auto c_ = at::matmul(a_, b_.transpose(0, 1)).to(at::kFloat);
+  // Sharding K dimension of all inputs and intermediates.
+  auto all_sharded_tvs = {a, b, a_t, b_t, a_b, b_b, ab, c0, c1};
+  for (auto tv : all_sharded_tvs) {
+    tv->axis(0)->parallelize(ParallelType::DIDx);
+    tv->setDeviceMesh(mesh);
+  }
+  // Sharding M on output
+  c->setDeviceMesh(mesh);
+  c->axis(1)->parallelize(ParallelType::DIDx);
+  std::cout << "C " << c->toString() << std::endl;
+  insertReshardings(fusion.get());
 
-  FusionExecutorCache executor_cache(std::move(fusion));
-  auto outputs = executor_cache.runFusionWithInputs({a_, b_});
-  NVF_CHECK(outputs[0].allclose(c_, .001, .001));
+  auto tensor_options =
+      at::TensorOptions().dtype(at::kHalf).device(communicator->device());
+  auto a_ = at::randn(a_shape, tensor_options)*10;
+  auto b_ = at::randn(b_shape, tensor_options)*10;
+
+  inputs = {
+      shardTensor(a_, mesh, communicator->deviceId()),
+      shardTensor(b_, mesh, communicator->deviceId())};
+
+  // auto c_ = at::matmul(a_.view({K,M}).transpose(0, 1), b_.view({K,N})).view({M,N}).to(at::kFloat);
+  // auto expected_output = shardTensor(c_, mesh, communicator->deviceId());
+  MultiDeviceExecutor runtime(std::move(fusion), *communicator);
+  auto outputs = runtime.runWithInput(inputs);
+  auto aten_outputs = runtime.runWithInput(inputs, true, MmaLayout::NT);
+  testValidate(
+      runtime.fusion(), outputs, inputs, aten_outputs, __LINE__, __FILE__);
 }
 
 } // namespace nvfuser

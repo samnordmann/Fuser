@@ -81,6 +81,7 @@ std::unordered_map<Val*, c10::IValue> MultiDeviceExecutor::allocateRecvBuffers(
   if (fusion_copy->outputs().empty()) {
     return {};
   }
+  
   // TODO: Not working with FusionExecutorCache
   FusionExecutor fe;
   fe.compileFusion(fusion_copy.get(), global_inputs_IValues);
@@ -166,23 +167,34 @@ void MultiDeviceExecutor::postKernel(SegmentedGroup* group, bool use_aten_matmul
     auto o = at::matmul(a.to(at::kFloat), b.to(at::kFloat));
     outputs.push_back(o);
   } else {
-    // Compile the group and execute it with FusionExecutor
-    // Check if the executor has been cached. If not, create and cache it
-  //   if (fe_.find(group) == fe_.end()) {
-  //     fe_.emplace(group, std::make_unique<FusionExecutor>());
-  //     fusions_.emplace(group, staged_fusion_->makeFusion(group));
-  //     auto can_use_matmul_scheduler = MatmulScheduler::canScheduleCompileTime(fusions_.at(group).get());
-  //     std::cout << "Can schedule matmul " << can_use_matmul_scheduler << std::endl;
-  //     fe_[group]->compileFusion(fusions_.at(group).get(), group_input_IValues);
-  //   }
-  //   outputs = fe_[group]->runFusion(group_input_IValues);
+    /*
+	  MatMulTileOptions gemm_tile;
+    gemm_tile.cta_tile = GemmTile(128, 128, 32);
+    gemm_tile.warp_tile = GemmTile(64, 64, 32);
+    gemm_tile.instruction_tile = GemmTile(16, 8, 16);
+
+    MatmulParams params;
+    params.mma_macro = MmaMacro::Ampere_16_8_16;
+    params.tile_sizes = gemm_tile;
+    params.async_gmem_load_operands = true;
+    params.double_buffer_options.double_buffer_smem_write = true;
+    params.double_buffer_options.double_buffer_smem_read = true;
+    params.double_buffer_options.smem_double_buffer_stage = 4;
+    
     auto fusion = staged_fusion_->makeFusion(group);
-    fusion->print();
-    auto can_use_matmul_scheduler = MatmulScheduler::canScheduleCompileTime(fusion.get());
-    std::cout << "Can schedule matmul " << can_use_matmul_scheduler << std::endl;
+    scheduleMatmul(fusion.get(), params);
+    auto fe = std::make_unique<FusionExecutor>();
+    fe->compileFusion(fusion.get(), group_input_IValues);
+    outputs = fe->runFusion(group_input_IValues);
+    */
+    
+    auto fusion = staged_fusion_->makeFusion(group);
+    // bool matmul_cs = MatmulScheduler::canScheduleCompileTime(fusion.get());
+    // std::cout << "Can schedule matmul on this fusion? " << matmul_cs << std::endl;
     FusionExecutorCache fec(std::move(fusion));
     outputs = fec.runFusionWithInputs(group_input_IValues);
-  }
+    
+    }
 
   // Store the outputs in the context
   for (auto output_idx : c10::irange(outputs.size())) {
