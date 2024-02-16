@@ -5879,7 +5879,7 @@ TEST_F(NVFuserTest, FusionReductionScheduler_CUDA) {
   at::Tensor aten_input = at::randn({bid_x, tid_x}, options);
   auto aten_output = aten_input.to(at::kDouble).sum({red_dim});
 
-  // Apply reduction heuristic //
+  // Apply reduction heuristic
   auto reduction_params = getReductionHeuristics(&fusion, {aten_input});
   NVF_CHECK(reduction_params, "Reduction schedule was not generated!");
   scheduleReduction(&fusion, *reduction_params);

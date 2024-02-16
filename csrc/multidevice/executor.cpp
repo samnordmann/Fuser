@@ -232,21 +232,6 @@ std::vector<at::Tensor> MultiDeviceExecutor::runWithInput(
         inputs.at(input_idx);
   }
 
-  // std::map<std::string, c10::IValue> pDimsExtents =
-  // {
-  //   {stringifyThreadSize(ParallelType::TIDx), {4}},
-  //   {stringifyThreadSize(ParallelType::BIDx), {2}}
-  // };
-  // for (auto group : group_run_order_) {
-  //   for (auto input: group->inputs()) {
-  //     if (input->isA<NamedScalar>()) {
-  //       if (auto name = input->as<NamedScalar>()->name(); pDimsExtents.count(name)) {
-  //         val_to_IValue_.insert({input, pDimsExtents[name]});
-  //       }
-  //     }
-  //   }
-  // }
-
   // Run through the groups to launch kernels and comms
   for (auto group : group_run_order_) {
     if (!is_resharding_.at(group)) {

@@ -383,9 +383,6 @@ TEST_F(PipelineTest, Overlap) {
 
   // executeAndValidate();
 }
-void shardOutMostDim(TensorView* tv){
-  TensorDomain::noReductions(tv->getLeafDomain()).at(0)->parallelize(ParallelType::DIDx);
-}
 
 enum class SchedulingMode {
   noScheduling,
@@ -410,6 +407,10 @@ std::ostream& operator<<(std::ostream& out, const SchedulingMode& mode) {
   return out << s;
 }
 
+void shardOutMostDim(TensorView* tv){
+  TensorDomain::noReductions(tv->getLeafDomain()).at(0)->parallelize(ParallelType::DIDx);
+}
+
 using PipelineTestStagedReductionParams =
     std::tuple<SchedulingMode>;
 class PipelineTestStagedReduction
@@ -421,7 +422,7 @@ class PipelineTestStagedReduction
 TEST_P(PipelineTestStagedReduction, staged_reduction) {
   auto [scheduling_mode] = GetParam();
 
-  int num_devices = communicator->is_available()? communicator->size() : 2; // for debug
+  int num_devices = communicator->size();
   int A = num_devices;
   int B = 8;
   int C = 32;
@@ -431,7 +432,6 @@ TEST_P(PipelineTestStagedReduction, staged_reduction) {
 
   FusionGuard fg(fusion.get());
   TensorView* tv0 = makeConcreteTensor(unsharded_input_sizes);
-  // tv0[I0{A}, I1{B}, I2{C}]
   TensorView* tv1 = sum(tv0, {2});
   TensorView* tv_out = sum(tv1, {0});
   fusion->addInput(tv0);
@@ -440,13 +440,9 @@ TEST_P(PipelineTestStagedReduction, staged_reduction) {
   // multi device scheduling:
   std::vector<int64_t> devices(num_devices);
   std::iota(devices.begin(), devices.end(), 0);
-  // if (!num_devices) { // for debug only when run on a non-distributed setting. TODO: remove the "if block"
-  //   devices.push_back(0);
-  // }
   DeviceMesh mesh(devices);
-  for (auto tv : ir_utils::filterByType<TensorView>(fusion->vals())) {
+  for (auto tv : ir_utils::allTvs(fusion.get())) {
     shardOutMostDim(tv);
-    // tv->axis(0)->parallelize(ParallelType::DIDx);
     tv->setDeviceMesh(mesh);
   }
 
@@ -465,6 +461,7 @@ TEST_P(PipelineTestStagedReduction, staged_reduction) {
   case SchedulingMode::manualScheduling: {
     auto_schedule = false;
     // inspired from NVFuserTest.FusionReduction1_CUDA
+    // tv0[I0{A}, I1{B}, I2{C}]
     tv1->split(2, 128);
     // tv1[I0{A}, I1{B}, R2o{C/128}, R2i{128}] = tv0[I0{A}, I1{B}, I2{C}]
     tv1->split(2, 4);
@@ -497,14 +494,6 @@ TEST_P(PipelineTestStagedReduction, staged_reduction) {
     break;
   } 
   }
-
-
-  // if (!communicator->deviceId()) {
-    fusion->print();
-  //   fusion->printTransforms();
-  //   fusion->printMath();
-  //   fusion->printKernel();
-  // }
 
   unsharded_inputs = {at::randn(unsharded_input_sizes, tensor_options)};
   ref_unsharded_outputs = {at::sum(unsharded_inputs.at(0).toTensor(), at::OptionalIntArrayRef({0,2}))};
