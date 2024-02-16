@@ -142,7 +142,7 @@ void MultiDeviceExecutor::postKernel(SegmentedGroup* group) {
         input,
         " for handling group ",
         toString(group));
-    NVF_ERROR(val_to_IValue_.at(input).isTensor());
+    // NVF_ERROR(val_to_IValue_.at(input).isTensor());
     group_input_IValues.push_back(val_to_IValue_.at(input));
   }
 
@@ -221,6 +221,21 @@ std::vector<at::Tensor> MultiDeviceExecutor::runWithInput(
     val_to_IValue_[staged_fusion_->inputs().at(input_idx)] =
         inputs.at(input_idx);
   }
+
+  // std::map<std::string, c10::IValue> pDimsExtents =
+  // {
+  //   {stringifyThreadSize(ParallelType::TIDx), {4}},
+  //   {stringifyThreadSize(ParallelType::BIDx), {2}}
+  // };
+  // for (auto group : group_run_order_) {
+  //   for (auto input: group->inputs()) {
+  //     if (input->isA<NamedScalar>()) {
+  //       if (auto name = input->as<NamedScalar>()->name(); pDimsExtents.count(name)) {
+  //         val_to_IValue_.insert({input, pDimsExtents[name]});
+  //       }
+  //     }
+  //   }
+  // }
 
   // Run through the groups to launch kernels and comms
   for (auto group : group_run_order_) {
