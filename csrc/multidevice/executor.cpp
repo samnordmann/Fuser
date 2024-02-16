@@ -131,6 +131,13 @@ void MultiDeviceExecutor::postKernel(SegmentedGroup* group) {
   if (!should_run_.at(group)) {
     return;
   }
+
+  group->input_vals.erase(std::remove_if(
+    group->input_vals.begin(), group->input_vals.end(),
+    [](Val* val) { 
+        return val->isA<NamedScalar>();
+    }), group->input_vals.end());
+
   // get the IValues corresponding to the group's input
   std::vector<c10::IValue> group_input_IValues;
   for (auto& input : group->inputs()) {
@@ -142,7 +149,7 @@ void MultiDeviceExecutor::postKernel(SegmentedGroup* group) {
         input,
         " for handling group ",
         toString(group));
-    // NVF_ERROR(val_to_IValue_.at(input).isTensor());
+    NVF_ERROR(val_to_IValue_.at(input).isTensor());
     group_input_IValues.push_back(val_to_IValue_.at(input));
   }
 
@@ -151,12 +158,15 @@ void MultiDeviceExecutor::postKernel(SegmentedGroup* group) {
 
   // Compile the group and execute it with FusionExecutor
   // Check if the executor has been cached. If not, create and cache it
+  auto l_params = LaunchParams();
+  l_params.bind(4, ParallelType::TIDx);
+  l_params.bind(8, ParallelType::BIDx);
   if (fe_.find(group) == fe_.end()) {
     fe_.emplace(group, std::make_unique<FusionExecutor>());
     fusions_.emplace(group, staged_fusion_->makeFusion(group));
-    fe_[group]->compileFusion(fusions_.at(group).get(), group_input_IValues);
+    fe_[group]->compileFusion(fusions_.at(group).get(), group_input_IValues, l_params);
   }
-  outputs = fe_[group]->runFusion(group_input_IValues);
+  outputs = fe_[group]->runFusion(group_input_IValues, l_params);
 
   // Store the outputs in the context
   for (auto output_idx : c10::irange(outputs.size())) {
