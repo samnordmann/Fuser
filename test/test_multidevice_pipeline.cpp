@@ -384,6 +384,131 @@ TEST_F(PipelineTest, Overlap) {
   // executeAndValidate();
 }
 
+enum class SchedulingMode {
+  noScheduling,
+  manualScheduling,
+  automaticScheduling
+};
+
+std::ostream& operator<<(std::ostream& out, const SchedulingMode& mode) {
+  std::string s;
+  switch (mode)
+  {
+  case SchedulingMode::noScheduling:
+    s = "noScheduling";
+    break;
+  case SchedulingMode::manualScheduling:
+    s = "manualScheduling";
+    break;
+  case SchedulingMode::automaticScheduling:
+    s = "automaticScheduling";
+    break;
+  }
+  return out << s;
+}
+
+void shardOutMostDim(TensorView* tv){
+  TensorDomain::noReductions(tv->getLeafDomain()).at(0)->parallelize(ParallelType::DIDx);
+}
+
+using PipelineTestStagedReductionParams =
+    std::tuple<SchedulingMode>;
+class PipelineTestStagedReduction
+    : public PipelineTest,
+      public ::testing::WithParamInterface<PipelineTestStagedReductionParams> {};
+
+// 1D staged reduction
+// Inputs: X[A,B,C]
+TEST_P(PipelineTestStagedReduction, staged_reduction) {
+  auto [scheduling_mode] = GetParam();
+
+  int num_devices = communicator->size();
+  int A = num_devices;
+  int B = 8;
+  int C = 32;
+  std::vector<int64_t> unsharded_input_sizes = {A, B, C};
+  std::vector<int64_t> input_sizes(unsharded_input_sizes);
+  input_sizes[0] = 1;
+
+  FusionGuard fg(fusion.get());
+  TensorView* tv0 = makeConcreteTensor(unsharded_input_sizes);
+  TensorView* tv1 = sum(tv0, {2});
+  TensorView* tv_out = sum(tv1, {0});
+  fusion->addInput(tv0);
+  fusion->addOutput(tv_out);
+
+  // multi device scheduling:
+  std::vector<int64_t> devices(num_devices);
+  std::iota(devices.begin(), devices.end(), 0);
+  DeviceMesh mesh(devices);
+  for (auto tv : ir_utils::allTvs(fusion.get())) {
+    shardOutMostDim(tv);
+    tv->setDeviceMesh(mesh);
+  }
+
+  // Intra-device reduction scheduling for the first reduction:
+  switch (scheduling_mode)
+  {
+  case SchedulingMode::noScheduling:
+    break;
+  case SchedulingMode::automaticScheduling: {   
+    auto reduction_params = getReductionHeuristics(fusion.get(), {at::empty(input_sizes, tensor_options)});
+    NVF_CHECK(reduction_params, "Reduction schedule was not generated!");
+    scheduleReduction(fusion.get(), *reduction_params);
+    auto_schedule = false;
+    break;
+  }
+  case SchedulingMode::manualScheduling: {
+    auto_schedule = false;
+    // inspired from NVFuserTest.FusionReduction1_CUDA
+    // tv0[I0{A}, I1{B}, I2{C}]
+    tv1->split(2, 128);
+    // tv1[I0{A}, I1{B}, R2o{C/128}, R2i{128}] = tv0[I0{A}, I1{B}, I2{C}]
+    tv1->split(2, 4);
+    // tv1[I0{A}, I1{B}, R2oo{C/128/4)}, R2oi{4}, R2i{128}] = tv0[I0{A}, I1{B}, I2{C}]
+
+    TensorView* tv2 = tv1->rFactor({2});
+    // tv2[I0{A}, I1{B}, R2oo{C/128/4)}, I2oi{4}, I2i{128}] = tv0[I0{A}, I1{B}, I2{C}]
+    // tv1[I0{A}, I1{B},                 R2oi{4}, R2i{128}] = tv2[I0{A}, I1{B}, R2oo{C/128/4)}, I2oi{4}, I2i{128}]
+
+    TensorView* tv3 = tv1->rFactor({2});
+    // tv2[I0{A}, I1{B}, R2oo{C/128/4)}, I2oi{4}, I2i{128}] = tv0[I0{A}, I1{B}, I2{C}]
+    // tv3[I0{A}, I1{B},                 R2oi{4}, I2i{128}] = tv2[I0{A}, I1{B}, R2oo{C/128/4)}, I2oi{4}, I2i{128}]
+    // tv1[I0{A}, I1{B},                          R2i{128}] = tv3[I0{A}, I1{B},                 R2oi{4}, I2i{128}]
+
+    // Incrementally, can print in between for debugging
+    tv0->computeAt(tv2, 2);
+    tv2->computeAt(tv3, 2);
+    tv3->computeAt(tv1, 2);
+
+    // Re do it all at once, because why not.
+    tv0->computeAt(tv1, 2);
+
+    tv2->axis(3)->parallelize(ParallelType::Unroll);
+    tv1->axis(1)->parallelize(ParallelType::BIDx);
+    tv1->setMemoryType(MemoryType::Global); // necessary to avoid runtime error
+
+    tv1->axis(-1)->parallelize(ParallelType::TIDx);
+    tv2->axis(-1)->parallelize(ParallelType::TIDx);
+    tv3->axis(-1)->parallelize(ParallelType::TIDx);
+    break;
+  } 
+  }
+
+  unsharded_inputs = {at::randn(unsharded_input_sizes, tensor_options)};
+  ref_unsharded_outputs = {at::sum(unsharded_inputs.at(0).toTensor(), at::OptionalIntArrayRef({0,2}))};
+
+  executeAndValidate();
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    SchedulingModes,
+    PipelineTestStagedReduction,
+    ::testing::Combine(
+        ::testing::Values(SchedulingMode::noScheduling,
+                          SchedulingMode::manualScheduling,
+                          SchedulingMode::automaticScheduling)));
+
 TensorView* MatrixMultiplication(TensorView* a, TensorView* b) {
   auto a_b = broadcast(a, {false, false, true}); // (x,y,b)
   auto b_b = broadcast(b, {true, false, false}); // (b,y,z)

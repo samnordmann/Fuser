@@ -120,13 +120,23 @@ void CommunicationTest::resetDstBuffers() {
 // It compares the given (possibly sharded) output with the result of the Fusion
 // run on a single device with the given (possibly sharded) inputs
 void PipelineTest::validate() {
-  // execute the fusion on one device without pipeline scheduling
-  auto fusion_copy = std::make_unique<Fusion>(*runtime->fusion());
-  unshard(fusion_copy.get());
-  FusionExecutorCache unsharded_fec(std::move(fusion_copy));
-  recordEvent("run unsharded fusion");
-  auto ref_unsharded_outputs =
-      unsharded_fec.runFusionWithInputs(unsharded_inputs);
+  if (ref_unsharded_outputs.empty()) {
+    // execute the fusion on one device without pipeline scheduling
+    auto fusion_copy = std::make_unique<Fusion>(*runtime->fusion());
+    unshard(fusion_copy.get());
+    if (auto_schedule) {
+      recordEvent("run (auto-schduled) unsharded fusion");
+      FusionExecutorCache unsharded_fec(std::move(fusion_copy));
+      ref_unsharded_outputs = unsharded_fec.runFusionWithInputs(unsharded_inputs);
+    } else {
+      recordEvent("run (manually-schduled) unsharded fusion");
+      FusionExecutor unsharded_fe;
+      std::vector<c10::IValue> unsharded_inputs_IValues(unsharded_inputs);
+      unsharded_fe.compileFusion(fusion_copy.get(), unsharded_inputs_IValues);
+      ref_unsharded_outputs = unsharded_fe.runFusion(unsharded_inputs_IValues);
+    }
+  }
+
 
   if (debug_print) {
     std::stringstream ss;
@@ -198,13 +208,13 @@ void PipelineTest::execute() {
   if (error_msg != "") {
     GTEST_SKIP() << error_msg;
   }
+  recordEvent("run the multidevice fusion");
+  outputs = runtime->runWithInput(inputs);
   if (debug_print) {
     if (!communicator->deviceId()) {
       runtime->print();
     }
   }
-  recordEvent("run the multidevice fusion");
-  outputs = runtime->runWithInput(inputs);
 
   if (debug_print) {
     std::stringstream ss;

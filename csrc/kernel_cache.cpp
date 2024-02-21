@@ -373,12 +373,15 @@ void prepareRuntimeOrder(
     auto input_val = segmented_fusion->inputs()[i];
     available_input.insert(input_val);
 
-    if (auto input_tv = dynamic_cast<TensorView*>(input_val)) {
+  if (auto input_tv = dynamic_cast<TensorView*>(input_val)) {
       auto root_dom = TensorDomain::noReductions(input_tv->getRootDomain());
-      for (const size_t dim : c10::irange(root_dom.size())) {
-        const auto extent = root_dom[dim]->getMaybeExpandedExtent();
-        available_input.insert(extent);
-        runtime_workspace.group_extent_binding_order.push_back(extent);
+      auto leaf_dom = TensorDomain::noReductions(input_tv->getLeafDomain());
+      for (auto dom : {root_dom,leaf_dom}) {
+        for (auto id : dom) {
+          const auto extent = id->getMaybeExpandedExtent();
+          available_input.insert(extent);
+          runtime_workspace.group_extent_binding_order.push_back(extent);
+        }
       }
     }
   }

@@ -15,6 +15,7 @@
 #include <scheduler/registry_utils.h>
 #include <scheduler/utils.h>
 #include <scheduler/vectorize_helper.h>
+#include <multidevice/utils.h>
 
 namespace nvfuser {
 
@@ -1182,6 +1183,8 @@ void scheduleReduction(Fusion* fusion, const ReductionParams& rparams) {
     reduction_tv->reorder(
         scheduler_utils::domainReorderAsRfactorMap(reduction_tv));
   }
+
+  NVF_ERROR(!(rparams.schedule_3D && isSharded(reduction_tv)));
 
   auto dim_analysis = scheduler_utils::canonicalDimReduction(
       fusion, reduction_tv, rparams.fastest_dim && rparams.schedule_3D);
