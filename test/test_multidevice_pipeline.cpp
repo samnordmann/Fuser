@@ -387,7 +387,8 @@ TEST_F(PipelineTest, Overlap) {
 enum class SchedulingMode {
   noScheduling,
   manualScheduling,
-  automaticScheduling
+  automaticScheduling,
+  FusionExecutorCache,
 };
 
 std::ostream& operator<<(std::ostream& out, const SchedulingMode& mode) {
@@ -402,6 +403,9 @@ std::ostream& operator<<(std::ostream& out, const SchedulingMode& mode) {
     break;
   case SchedulingMode::automaticScheduling:
     s = "automaticScheduling";
+    break;
+  case SchedulingMode::FusionExecutorCache:
+    s = "FusionExecutorCache";
     break;
   }
   return out << s;
@@ -446,21 +450,26 @@ TEST_P(PipelineTestStagedReduction, staged_reduction) {
     tv->setDeviceMesh(mesh);
   }
 
+  use_fusion_executor_cache_at_execute = false;
+
   // Intra-device reduction scheduling for the first reduction:
   switch (scheduling_mode)
   {
   case SchedulingMode::noScheduling:
+    break;
+  case SchedulingMode::FusionExecutorCache:
+    use_fusion_executor_cache_at_execute = true;
     break;
   case SchedulingMode::automaticScheduling: {   
     auto reduction_params = getReductionHeuristics(fusion.get(), {at::empty(input_sizes, tensor_options)});
     NVF_CHECK(reduction_params, "Reduction schedule was not generated!");
     l_params = reduction_params->lparams;
     scheduleReduction(fusion.get(), *reduction_params);
-    auto_schedule = false;
+    use_fusion_executor_cache_at_validate = false;
     break;
   }
   case SchedulingMode::manualScheduling: {
-    auto_schedule = false;
+    use_fusion_executor_cache_at_validate = false;
     // inspired from NVFuserTest.FusionReduction1_CUDA
     // tv0[I0{A}, I1{B}, I2{C}]
     tv1->split(2, 128);
@@ -508,7 +517,8 @@ INSTANTIATE_TEST_SUITE_P(
     ::testing::Combine(
         ::testing::Values(SchedulingMode::noScheduling,
                           SchedulingMode::manualScheduling,
-                          SchedulingMode::automaticScheduling)));
+                          SchedulingMode::automaticScheduling,
+                          SchedulingMode::FusionExecutorCache)));
 
 TensorView* MatrixMultiplication(TensorView* a, TensorView* b) {
   auto a_b = broadcast(a, {false, false, true}); // (x,y,b)

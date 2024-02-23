@@ -124,7 +124,7 @@ void PipelineTest::validate() {
     // execute the fusion on one device without pipeline scheduling
     auto fusion_copy = std::make_unique<Fusion>(*runtime->fusion());
     unshard(fusion_copy.get());
-    if (auto_schedule) {
+    if (use_fusion_executor_cache_at_validate) {
       recordEvent("run (auto-schduled) unsharded fusion");
       FusionExecutorCache unsharded_fec(std::move(fusion_copy));
       ref_unsharded_outputs = unsharded_fec.runFusionWithInputs(unsharded_inputs);
@@ -209,7 +209,7 @@ void PipelineTest::execute() {
     GTEST_SKIP() << error_msg;
   }
   recordEvent("run the multidevice fusion");
-  outputs = runtime->runWithInput(inputs, l_params);
+  outputs = runtime->runWithInput(inputs, l_params, use_fusion_executor_cache_at_execute);
   if (debug_print) {
     if (!communicator->deviceId()) {
       runtime->print();

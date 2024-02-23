@@ -163,14 +163,21 @@ void MultiDeviceExecutor::postKernel(SegmentedGroup* group) {
   // placeholder for storing the group's outputs
   std::vector<at::Tensor> outputs;
 
-  // Compile the group and execute it with FusionExecutor
+  // Compile the group and execute it with FusionExecutor(Cache)
   // Check if the executor has been cached. If not, create and cache it
-  if (fe_.find(group) == fe_.end()) {
-    fe_.emplace(group, std::make_unique<FusionExecutor>());
-    fusions_.emplace(group, staged_fusion_->makeFusion(group));
-    fe_[group]->compileFusion(fusions_.at(group).get(), group_input_IValues, l_params_);
+  if (use_fusion_executor_cache_at_execute_) {
+    if (fec_.find(group) == fec_.end()) {
+      fec_.emplace(group, std::make_unique<FusionExecutorCache>(staged_fusion_->makeFusion(group)));
+    }
+    outputs = fec_[group]->runFusionWithInputs(group_input_IValues);
+  } else {
+    if (fe_.find(group) == fe_.end()) {
+      fe_.emplace(group, std::make_unique<FusionExecutor>());
+      fusions_.emplace(group, staged_fusion_->makeFusion(group));
+      fe_[group]->compileFusion(fusions_.at(group).get(), group_input_IValues, l_params_);
+    }
+    outputs = fe_[group]->runFusion(group_input_IValues, l_params_);
   }
-  outputs = fe_[group]->runFusion(group_input_IValues, l_params_);
 
   // Store the outputs in the context
   for (auto output_idx : c10::irange(outputs.size())) {
@@ -217,7 +224,7 @@ void MultiDeviceExecutor::postCommunication(SegmentedGroup* group) {
 }
 
 std::vector<at::Tensor> MultiDeviceExecutor::runWithInput(
-    const std::vector<c10::IValue>& inputs, LaunchParams l_params) {
+    const std::vector<c10::IValue>& inputs, LaunchParams l_params, bool use_fusion_executor_cache_at_execute) {
   // make sure the communicator can run the Fusion (e.g. there is enough GPUs,
   // etc)
   auto error_msg = validate();
@@ -228,7 +235,8 @@ std::vector<at::Tensor> MultiDeviceExecutor::runWithInput(
       inputs.size() == staged_fusion_->inputs().size(),
       "Wrong number of inputs");
 
-  l_params_ = std::move(l_params);;
+  use_fusion_executor_cache_at_execute_ = use_fusion_executor_cache_at_execute;
+  l_params_ = std::move(l_params);
 
   val_to_IValue_ = allocateRecvBuffers(inputs);
 

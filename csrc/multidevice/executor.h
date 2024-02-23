@@ -27,7 +27,7 @@ class MultiDeviceExecutor {
   MultiDeviceExecutor(std::unique_ptr<Fusion> fusion, Communicator& comm);
 
   // Run the fusion on several devices with the given global inputs
-  std::vector<at::Tensor> runWithInput(const std::vector<c10::IValue>& inputs, LaunchParams l_params = LaunchParams());
+  std::vector<at::Tensor> runWithInput(const std::vector<c10::IValue>& inputs, LaunchParams l_params = LaunchParams(), bool use_fusion_executor_cache_at_execute = false);
 
   // Returns the Communicator
   Communicator* comm() const {
@@ -71,6 +71,7 @@ class MultiDeviceExecutor {
   std::vector<SegmentedGroup*> group_run_order_;
   // Cache Fusions, FusionExecutors, and Communications
   std::unordered_map<SegmentedGroup*, std::unique_ptr<FusionExecutor>> fe_;
+  std::unordered_map<SegmentedGroup*, std::unique_ptr<FusionExecutorCache>> fec_;
   std::unordered_map<SegmentedGroup*, std::unique_ptr<Fusion>> fusions_;
   std::unordered_map<
       SegmentedGroup*,
@@ -81,6 +82,7 @@ class MultiDeviceExecutor {
   // Cache whether a SegmentedGroup requires inter-device communication
   std::map<SegmentedGroup*, bool> is_resharding_;
   LaunchParams l_params_;
+  bool use_fusion_executor_cache_at_execute_;
 };
 
 } // namespace nvfuser
