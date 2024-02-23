@@ -209,7 +209,7 @@ void PipelineTest::execute() {
     GTEST_SKIP() << error_msg;
   }
   recordEvent("run the multidevice fusion");
-  outputs = runtime->runWithInput(inputs);
+  outputs = runtime->runWithInput(inputs, l_params);
   if (debug_print) {
     if (!communicator->deviceId()) {
       runtime->print();

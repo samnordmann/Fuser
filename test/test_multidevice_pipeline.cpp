@@ -454,6 +454,7 @@ TEST_P(PipelineTestStagedReduction, staged_reduction) {
   case SchedulingMode::automaticScheduling: {   
     auto reduction_params = getReductionHeuristics(fusion.get(), {at::empty(input_sizes, tensor_options)});
     NVF_CHECK(reduction_params, "Reduction schedule was not generated!");
+    l_params = reduction_params->lparams;
     scheduleReduction(fusion.get(), *reduction_params);
     auto_schedule = false;
     break;

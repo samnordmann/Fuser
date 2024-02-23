@@ -19,15 +19,6 @@ namespace nvfuser {
 
 namespace {
 
-// auto compare = [](const ParallelType& a, const std::string& b) { return stringifyThreadSize(a) == b; };
-std::unordered_map<ParallelType, int64_t> parallel_dims_extents = {
-  {ParallelType::TIDx, 4},
-  {ParallelType::BIDx, 8}
-};
-// std::unordered_map<ParallelType, int64_t, decltype(compare)> parallel_dims_extents(compare);
-// parallel_dims_extents.insert({ParallelType::TIDx, 4});
-// parallel_dims_extents.insert({ParallelType::BIDx, 8});
-
 std::pair<std::unique_ptr<Fusion>, std::unordered_map<Val*, Val*>>
 copyFusionAndChangeOutputs(Fusion* fusion, std::unordered_set<Val*> outputs) {
   std::unique_ptr<Fusion> fusion_copy = std::make_unique<Fusion>();
@@ -142,24 +133,18 @@ void MultiDeviceExecutor::postKernel(SegmentedGroup* group) {
   }
 
   // erase from group's input extent corresponding to grid and block dims. Set them through launchparams.
-  auto l_params = LaunchParams();
-  std::unordered_set<Val*> to_erase;
-  for (auto input: group->inputs()) {
-    if (input->isA<NamedScalar>()) {
-      // auto name = ->name();
-      auto ns = input->as<NamedScalar>();
-      auto parallel_type = ns->getParallelDim();
-      NVF_ERROR(parallel_type.has_value());
-      NVF_ERROR(parallel_dims_extents.count(parallel_type.value()));
-      l_params.bind(parallel_dims_extents[parallel_type.value()], parallel_type.value());
-      to_erase.insert(input);
+  {  
+    std::vector<Val*> group_input_vals;
+    for (auto input: group->inputs()) {
+      if (input->isA<NamedScalar>()) {
+        NVF_ERROR(input->as<NamedScalar>()->getParallelDim().has_value());
+        NVF_ERROR(l_params_.hasDim(input->as<NamedScalar>()->getParallelDim().value()));
+        continue;
+      }
+      group_input_vals.push_back(input);
     }
-  }
-  group->input_vals.erase(std::remove_if(group->input_vals.begin(),
-                                         group->input_vals.end(),
-                                         [to_erase](auto val){return to_erase.count(val);}),
-                          group->input_vals.end());
-
+    group->input_vals = std::move(group_input_vals);
+  } 
   // get the IValues corresponding to the group's input
   std::vector<c10::IValue> group_input_IValues;
   for (auto& input : group->inputs()) {
@@ -183,9 +168,9 @@ void MultiDeviceExecutor::postKernel(SegmentedGroup* group) {
   if (fe_.find(group) == fe_.end()) {
     fe_.emplace(group, std::make_unique<FusionExecutor>());
     fusions_.emplace(group, staged_fusion_->makeFusion(group));
-    fe_[group]->compileFusion(fusions_.at(group).get(), group_input_IValues, l_params);
+    fe_[group]->compileFusion(fusions_.at(group).get(), group_input_IValues, l_params_);
   }
-  outputs = fe_[group]->runFusion(group_input_IValues, l_params);
+  outputs = fe_[group]->runFusion(group_input_IValues, l_params_);
 
   // Store the outputs in the context
   for (auto output_idx : c10::irange(outputs.size())) {
@@ -232,7 +217,7 @@ void MultiDeviceExecutor::postCommunication(SegmentedGroup* group) {
 }
 
 std::vector<at::Tensor> MultiDeviceExecutor::runWithInput(
-    const std::vector<c10::IValue>& inputs) {
+    const std::vector<c10::IValue>& inputs, LaunchParams l_params) {
   // make sure the communicator can run the Fusion (e.g. there is enough GPUs,
   // etc)
   auto error_msg = validate();
@@ -242,6 +227,8 @@ std::vector<at::Tensor> MultiDeviceExecutor::runWithInput(
   NVF_ERROR(
       inputs.size() == staged_fusion_->inputs().size(),
       "Wrong number of inputs");
+
+  l_params_ = std::move(l_params);;
 
   val_to_IValue_ = allocateRecvBuffers(inputs);
 

@@ -27,7 +27,7 @@ class MultiDeviceExecutor {
   MultiDeviceExecutor(std::unique_ptr<Fusion> fusion, Communicator& comm);
 
   // Run the fusion on several devices with the given global inputs
-  std::vector<at::Tensor> runWithInput(const std::vector<c10::IValue>& inputs);
+  std::vector<at::Tensor> runWithInput(const std::vector<c10::IValue>& inputs, LaunchParams l_params = LaunchParams());
 
   // Returns the Communicator
   Communicator* comm() const {
@@ -80,6 +80,7 @@ class MultiDeviceExecutor {
   std::unordered_map<SegmentedGroup*, bool> should_run_;
   // Cache whether a SegmentedGroup requires inter-device communication
   std::map<SegmentedGroup*, bool> is_resharding_;
+  LaunchParams l_params_;
 };
 
 } // namespace nvfuser

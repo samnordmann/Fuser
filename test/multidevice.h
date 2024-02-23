@@ -113,6 +113,7 @@ class PipelineTest : public MultiDeviceTest {
   std::vector<at::Tensor> outputs;
   bool auto_schedule = true;
   std::vector<at::Tensor> ref_unsharded_outputs;
+  LaunchParams l_params = {};
 };
 
 } // namespace nvfuser
