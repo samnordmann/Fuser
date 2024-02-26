@@ -28,9 +28,6 @@ void MultiDeviceEnvironment::SetUp() {
   if (getNvFuserEnv("MULTIDEVICE_DEBUG_BARRIER")) {
     do_barrier_at_test_ = true;
   }
-  if (getNvFuserEnv("MULTIDEVICE_TIME_PRINT")) {
-    time_print_ = true;
-  }
   if (getNvFuserEnv("MULTIDEVICE_DISABLE_SKIP")) {
     disable_skip_ = true;
   }
@@ -42,7 +39,6 @@ void MultiDeviceTest::SetUp() {
   debug_print = multidevice_env->debugPrint();
   do_barrier_at_test =
       multidevice_env->doBarrierAtTest() && communicator->is_available();
-  time_print = multidevice_env->timePrint() && communicator->is_available();
   disable_skip = multidevice_env->disableSkip();
   if (!disable_skip &&
       (!communicator->is_available() || communicator->size() < 2 ||
@@ -51,43 +47,13 @@ void MultiDeviceTest::SetUp() {
   }
   tensor_options =
       at::TensorOptions().dtype(at::kFloat).device(communicator->device());
-  recordEvent("init");
 }
 
 void MultiDeviceTest::TearDown() {
   if (do_barrier_at_test) {
-    recordEvent("final barrier");
     communicator->barrier();
   }
-  recordEvent("cleanup");
-  if (time_print) {
-    printTimes();
-  }
   NVFuserTest::TearDown();
-}
-
-void MultiDeviceTest::recordEvent(const std::string name) {
-  times.push_back(
-      std::make_pair(name, std::chrono::high_resolution_clock::now()));
-}
-
-void MultiDeviceTest::printTimes() {
-  std::stringstream ss;
-  auto test_info = ::testing::UnitTest::GetInstance()->current_test_info();
-  ss << "Rank " << communicator->deviceId() << " -- test "
-     << test_info->test_suite_name() << "." << test_info->name()
-     << " -- Timestamps: {\n";
-  for (auto i : c10::irange(times.size() - 1)) {
-    auto [event_name, time] = times[i];
-    auto [_, next_time] = times[i + 1];
-    ss << "  " << event_name << ": "
-       << std::chrono::duration_cast<std::chrono::milliseconds>(
-              next_time - time)
-              .count()
-       << " ms\n";
-  }
-  ss << "}";
-  std::cout << ss.str() << std::endl;
 }
 
 void CommunicationTest::SetUp() {
@@ -124,7 +90,6 @@ void PipelineTest::validate() {
   auto fusion_copy = std::make_unique<Fusion>(*runtime->completeFusion());
   unshard(fusion_copy.get());
   FusionExecutorCache unsharded_fec(std::move(fusion_copy));
-  recordEvent("run unsharded fusion");
   auto ref_unsharded_outputs =
       unsharded_fec.runFusionWithInputs(unsharded_inputs);
 
@@ -140,7 +105,6 @@ void PipelineTest::validate() {
     std::cout << ss.str() << std::endl;
   }
 
-  recordEvent("validate unsharded fusion");
   GTEST_ASSERT_EQ(ref_unsharded_outputs.size(), outputs.size());
   for (int i : c10::irange(runtime->completeFusion()->outputs().size())) {
     GTEST_ASSERT_TRUE(
@@ -193,7 +157,6 @@ void PipelineTest::execute() {
     std::cout << ss.str() << std::endl;
   }
 
-  recordEvent("runtime instantiation");
   runtime =
       std::make_unique<MultiDeviceExecutor>(std::move(fusion), *communicator);
   auto error_msg = runtime->validate();
@@ -205,7 +168,6 @@ void PipelineTest::execute() {
       runtime->print();
     }
   }
-  recordEvent("run the multidevice fusion");
   outputs = runtime->runWithInput(inputs);
 
   if (debug_print) {
