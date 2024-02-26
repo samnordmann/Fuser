@@ -173,7 +173,7 @@ void unshard(TensorView* tv) {
 }
 
 void unshard(Fusion* fusion) {
-  for (auto tv : ir_utils::filterByType<TensorView>(fusion->vals())) {
+  for (auto tv : ir_utils::allTvs(fusion)) {
     unshard(tv);
   }
 }

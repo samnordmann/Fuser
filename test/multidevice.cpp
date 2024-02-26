@@ -28,11 +28,14 @@ void MultiDeviceEnvironment::SetUp() {
   if (getNvFuserEnv("MULTIDEVICE_DEBUG_BARRIER")) {
     do_barrier_at_test_ = true;
   }
-  if (getNvFuserEnv("MULTIDEVICE_TIME_PRINT")) {
-    time_print_ = true;
-  }
   if (getNvFuserEnv("MULTIDEVICE_DISABLE_SKIP")) {
     disable_skip_ = true;
+  }
+}
+
+void MultiDeviceEnvironment::TearDown() {
+  if (communicator_->is_available()) {
+    communicator_->barrier();
   }
 }
 
@@ -42,7 +45,6 @@ void MultiDeviceTest::SetUp() {
   debug_print = multidevice_env->debugPrint();
   do_barrier_at_test =
       multidevice_env->doBarrierAtTest() && communicator->is_available();
-  time_print = multidevice_env->timePrint() && communicator->is_available();
   disable_skip = multidevice_env->disableSkip();
   if (!disable_skip &&
       (!communicator->is_available() || communicator->size() < 2 ||
@@ -51,7 +53,6 @@ void MultiDeviceTest::SetUp() {
   }
   tensor_options =
       at::TensorOptions().dtype(at::kFloat).device(communicator->device());
-  recordEvent("init");
 }
 
 void MultiDeviceTest::TearDown() {
