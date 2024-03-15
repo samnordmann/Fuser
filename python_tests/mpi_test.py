@@ -24,9 +24,9 @@ class MultiDeviceModel(FusionDefinition):
 
     def definition(self):
         # dynamic shape isn't working? at least I'm getting asserts
-        #self.t0 = self.from_pytorch(inputs[0])
+        self.t0 = self.from_pytorch(inputs[0])
 
-        self.t0 = self.define_tensor((2, 4), (False, False), dtype=DataType.Float)
+        # self.t0 = self.define_tensor((2, 4), (False, False), dtype=DataType.Float)
 
         # looks like I cannot have scalar inputs to any expression, hitting an assert
         #self.s0 = self.define_constant(2.0)

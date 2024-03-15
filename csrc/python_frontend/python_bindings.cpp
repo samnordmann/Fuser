@@ -210,7 +210,7 @@ struct DimInfo {
   std::optional<bool> contiguity = std::nullopt;
 
   bool isBroadcast() {
-    return stride == 0 || size == 1;
+    return false; // this might seenm brutal, but how check if the axis is cheduled to be sharded ?
   }
 };
 
@@ -752,7 +752,7 @@ void initNvFuserPythonBindings(PyObject* module) {
             if (contiguity.empty()) {
               for (const auto dim_size : shape) {
                 if (dim_size == 1) {
-                  contiguity.emplace_back(std::nullopt);
+                  contiguity.emplace_back(false); // should be false if the axis is sharded...
                 } else {
                   contiguity.emplace_back(false);
                 }
@@ -795,7 +795,7 @@ void initNvFuserPythonBindings(PyObject* module) {
                 strides.size());
 
             // TensorViewBuilder assumes any dim with a compile time constant
-            // size == 1 is a "maybe broadcast" axis, symbolic sizes are
+            // size == 1 is a "maybe broadcast" axis (what does it mean?), symbolic sizes are
             // identified by -1, and size == 0 is not supported.
 
             // Translate to TensorViewBuilder's view of the world.
@@ -811,7 +811,7 @@ void initNvFuserPythonBindings(PyObject* module) {
                 dim_sizes.push_back(sizes[i]);
               } else { // Symbolic defined tensor for dynamic shape usage
                 if (sizes[i] == 1) {
-                  dim_sizes.push_back(1);
+                  dim_sizes.push_back(-1); // why a special case for size=1 here?
                 } else {
                   dim_sizes.push_back(-1);
                 }
