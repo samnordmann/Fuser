@@ -33,9 +33,9 @@ class MultiDeviceModel(FusionDefinition):
         #self.t1 = self.ops.mul(self.t0, self.s0)
 
         # relu seems to also be complaining, I assume sharding operation has to be a set
-        #self.t1 = self.ops.relu(self.t0)
+        self.t1 = self.ops.relu(self.t0)
 
-        self.t1 = self.ops.set(self.t0)
+        # self.t1 = self.ops.set(self.t0)
         self.t2 = self.ops.add(self.t1, self.t1)
         self.add_output(self.t2)
 
