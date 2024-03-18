@@ -304,6 +304,37 @@ INSTANTIATE_TEST_SUITE_P(
         ::testing::Values(true),
         ::testing::Bool()));
 
+TEST_F(PipelineTest, Python_API_Cousin_test) {
+  const std::vector<int64_t> input_shape = {2, 16};
+  // ===========================================================
+  //        FUSION
+  // ===========================================================
+  FusionGuard fg(fusion.get());
+
+  TensorView* tv0 = makeContigTensor(input_shape.size());
+  fusion->addInput(tv0);
+  TensorView* tv1 = relu(tv0);
+  // need to add the following to avoid the error that local allocation cannot contain dynamic shape (https://github.com/NVIDIA/Fuser/blob/70cf7a371bf4603c30e3e2523469c75e749639fd/csrc/executor.cpp#L431)
+  tv1->setMemoryType(MemoryType::Global);
+
+  TensorView* tv2 = add(tv1, tv1);
+  fusion->addOutput(tv2);
+
+  DeviceMesh mesh({0,1});
+
+  tv0->setDeviceMesh(mesh);
+  tv0->axis(0)->parallelize(ParallelType::DIDx);
+  tv1->setDeviceMesh(mesh);
+  tv2->setDeviceMesh(mesh);
+
+  unsharded_inputs = {
+      at::randn(input_shape, tensor_options)};
+
+  executeAndValidate();
+}
+
+
+
 } // namespace nvfuser
 
 #endif
