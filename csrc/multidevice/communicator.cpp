@@ -9,6 +9,7 @@
 
 #include <netdb.h>
 #include <map>
+#include <regex>
 
 #ifdef NVFUSER_DISTRIBUTED
 #include <torch/csrc/distributed/c10d/PrefixStore.hpp>
@@ -41,6 +42,41 @@ std::ostream& operator<<(std::ostream& out, const CommunicatorBackend& cb) {
 }
 
 namespace {
+
+// Function to parse a range like "0-3" or "0,2,4"
+int parseFirstRange(const std::string& range) {
+    std::regex range_regex("(\\d+)-(\\d+)");
+    std::regex list_regex("(\\d+)");
+    std::smatch match;
+
+    if (std::regex_match(range, match, range_regex)) {
+        return std::stoi(match[1]); // Return the first number in the range
+    } else if (std::regex_search(range, match, list_regex)) {
+        return std::stoi(match[0]); // Return the first number in the list
+    }
+
+    return -1; // parsing failed
+}
+
+// Function to get the first node name from SLURM_JOB_NODELIST
+std::string getFirstNodeName(const std::string& nodeList) {
+    std::regex node_regex("(\\D+?)(\\d+|\\[(.*?)\\])");
+    std::smatch match;
+
+    if (std::regex_search(nodeList, match, node_regex)) {
+        std::string prefix = match[1];
+        std::string range = match[3].str().empty() ? match[2] : match[3];
+
+        int index = parseFirstRange(range);
+        if (index != -1) {
+          return prefix + std::to_string(index);
+        }
+    }
+
+    return ""; // If no match is found
+}
+
+
 // Parse the environment to retrieve MPI rank, world size, local rank,
 // local world size, and also master address and master port.
 // Returns true if the distributed configuration is valid, false otherwise
@@ -112,6 +148,8 @@ bool parseEnv(
     master_addr = gethostbyname(env)->h_name;
   } else if (local_size == size) {
     master_addr = "localhost";
+  } else if (std::string first_node = getFirstNodeName(std::getenv("SLURM_JOB_NODELIST")); !first_node.empty()) {
+    master_addr = first_node;
   } else {
     TORCH_WARN(
         "the environment variable MASTER_ADDR "
