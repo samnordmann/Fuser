@@ -429,6 +429,91 @@ TEST_P(DistributedTransformerTest, Sequence_Parallel_MLP_Layer) {
   validate(expected_outputs, outputs, {0.01, 0.01, 0.02, 0.02});
 }
 
+TEST_P(DistributedTransformerTest, Sequence_Parallel_MLP_Layer_MultiDeviceExecutor) {
+  // TODO: Reshapes that form device axes when D=1 get optimized away causing
+  // failures. This won't be a problem after
+  // https://github.com/NVIDIA/Fuser/issues/2563.
+  if (D == 1) {
+    GTEST_SKIP() << "Requires >1 devices, D=" << D;
+  }
+  if ((4 * E) % D != 0) {
+    GTEST_SKIP() << "Requires number of devices=" << D
+                 << " evenly divide 4*E=" << 4 * E;
+  }
+  if ((B * S) % D != 0) {
+    GTEST_SKIP() << "Requires number of devices=" << D
+                 << " evenly divide B*S=" << B * S;
+  }
+  DataType dtype = GetParam();
+  at::ScalarType at_dtype = data_type_to_aten(dtype);
+  auto fusion = std::make_unique<Fusion>();
+  FusionGuard fg(fusion.get());
+  const auto mesh = DeviceMesh::createForNumDevices(D);
+
+  TensorView* x = makeContigConcreteTensor({D, B * S / D , E}, dtype);
+  TensorView* w0 = makeContigConcreteTensor({D, 4 * E / D, E}, dtype);
+  TensorView* b0 = makeContigConcreteTensor({D, 4 * E / D}, dtype);
+  TensorView* w1 = makeContigConcreteTensor({D, E, 4 * E / D}, dtype);
+  TensorView* b1 = makeContigConcreteTensor({E}, dtype);
+
+  // Input x is sharded on B*S dimension.
+  // Note only the sequence (S) dimension that is sharded
+  // but to avoid DID parallelizations of inner logical axes
+  // B*S is sharded.
+  auto tvsout = model->mlp(x, w0, b0, w1, b1, mesh, true);
+
+  fusion->addInput(x);
+  fusion->addInput(w0);
+  fusion->addInput(b0);
+  fusion->addInput(w1);
+  fusion->addInput(b1);
+
+  fusion->addOutput(tvsout.linear0);
+  fusion->addOutput(tvsout.gelu);
+  fusion->addOutput(tvsout.linear1);
+  fusion->addOutput(tvsout.output);
+
+  shardBetween({w0}, {tvsout.matmul1}, w0);
+  shardBetween({w1}, {tvsout.matmul1}, w1);
+  shardBetween({tvsout.matmul1}, {tvsout.output}, tvsout.matmul1);
+
+  auto options =
+      at::TensorOptions().dtype(at_dtype).device(communicator_->device());
+  auto x_ = at::randn({B * S, E}, options);
+  auto w0_ = at::randn({4 * E, E}, options) * kParamScale;
+  auto b0_ = at::randn({4 * E}, options) * kParamScale;
+  auto w1_ = at::randn({E, 4 * E}, options) * kParamScale;
+  auto b1_ = at::randn({E}, options) * kParamScale;
+
+  // Dropout is sharded among devices.
+  // For validation against ATen the sharded reference dropout mask is an input
+  // to the Fusion, but in regular setting it would be generated.
+  std::vector<at::Tensor> reference_outs =
+      reference_mlp(x_, w0_, b0_, w1_, b1_);
+  auto mask_ = reference_outs[4];
+
+  std::vector<c10::IValue> inputs = {
+      shardTensor(x_, 0, mesh).unsqueeze(0),
+      shardTensor(w0_, 0, mesh).unsqueeze(0),
+      shardTensor(b0_, 0, mesh).unsqueeze(0),
+      shardTensor(w1_, 1, mesh).unsqueeze(0),
+      b1_};
+
+  std::vector<at::Tensor> expected_outputs = {
+      shardTensor(reference_outs[0], 1, mesh).unsqueeze(0),
+      shardTensor(reference_outs[1], 1, mesh).unsqueeze(0),
+      shardTensor(reference_outs[2], 0, mesh).unsqueeze(0),
+      shardTensor(reference_outs[3], 0, mesh).unsqueeze(0)};
+
+  at::manual_seed(getATenRandomSeed());
+
+  hir::HostIrEvaluatorParams params;
+  params.use_fusion_executor_cache=true;
+  MultiDeviceExecutor executor(std::move(fusion), *communicator_, params);
+  auto outputs = executor.runWithInput(inputs);
+  validate(expected_outputs, outputs, {0.01, 0.01, 0.02, 0.02});
+}
+
 TEST_P(DistributedTransformerTest, MultiheadAttention) {
   if (H % D != 0) {
     GTEST_SKIP() << "Requires number of devices=" << D

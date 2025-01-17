@@ -4133,8 +4133,10 @@ void SegmentCandidateFinder::findSegments() {
   removeScalarEdges();
 
   // Run pre-merge heuristics
-  MergeUpAndDownCast::run(this);
-  segmented_fusion_->validateIfDebug(true);
+  if (!options_.only_segment_resharding_exprs) {
+    MergeUpAndDownCast::run(this);
+    segmented_fusion_->validateIfDebug(true);
+  }
 
   if (options_.run_combine_reductions && CombineReductions::shouldRun(this)) {
     CombineReductions::run(this);
