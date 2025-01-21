@@ -21,7 +21,7 @@ namespace nvfuser {
 namespace {
 // Note: We test on smaller model and input sizes to avoid high error
 // accumulation for validation.
-static constexpr int64_t B = 2, E = 768, H = 16, S = 128;
+static constexpr int64_t B = 2, E = 768, H = 16, S = 128, O = 2;
 // Note: Dropout probabilities are set to 0. Since the dropout mask is sharded
 // it throws off the seed offset between the sharded nvFuser program and the
 // unsharded reference.
@@ -38,7 +38,7 @@ class DistributedTransformerTest
  protected:
   DistributedTransformerTest() : D(communicator_->size()) {
     model = std::make_unique<DistributedTransformer>(
-        D, B, E, H, S, kDropoutProb, kSdpaProb);
+        D, B, E, H, S, O, kDropoutProb, kSdpaProb);
   }
 
   void SetUp() override {
@@ -450,7 +450,7 @@ TEST_P(DistributedTransformerTest, Sequence_Parallel_MLP_Layer_MultiDeviceExecut
   FusionGuard fg(fusion.get());
   const auto mesh = DeviceMesh::createForNumDevices(D);
 
-  TensorView* x = makeContigConcreteTensor({D, B * S / D , E}, dtype);
+  TensorView* x = makeContigConcreteTensor({O, D, B * S / (D * O) , E}, dtype);
   TensorView* w0 = makeContigConcreteTensor({D, 4 * E / D, E}, dtype);
   TensorView* b0 = makeContigConcreteTensor({D, 4 * E / D}, dtype);
   TensorView* w1 = makeContigConcreteTensor({D, E, 4 * E / D}, dtype);
@@ -493,7 +493,7 @@ TEST_P(DistributedTransformerTest, Sequence_Parallel_MLP_Layer_MultiDeviceExecut
   auto mask_ = reference_outs[4];
 
   std::vector<c10::IValue> inputs = {
-      shardTensor(x_, 0, mesh).unsqueeze(0),
+      shardTensor(x_, 1, mesh).unsqueeze(0),
       shardTensor(w0_, 0, mesh).unsqueeze(0),
       shardTensor(b0_, 0, mesh).unsqueeze(0),
       shardTensor(w1_, 1, mesh).unsqueeze(0),

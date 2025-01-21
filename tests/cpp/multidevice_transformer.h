@@ -35,6 +35,7 @@ class DistributedTransformer {
       int64_t embedding_size,
       int64_t number_heads,
       int64_t sequence_length,
+      int64_t stream_parallel = 2,
       double dropout_prob = 0.1,
       double sdpa_dropout_prob = 0.1)
       : D(num_devices),
@@ -42,6 +43,7 @@ class DistributedTransformer {
         E(embedding_size),
         H(number_heads),
         S(sequence_length),
+        O(stream_parallel),
         kDropoutProb(dropout_prob),
         kSdpaProb(sdpa_dropout_prob) {}
 
@@ -90,7 +92,7 @@ class DistributedTransformer {
       TensorView* linear0,
       const DeviceMesh& mesh);
 
-  const int64_t D, B, E, H, S;
+  const int64_t D, B, E, H, S, O;
   const double kDropoutProb;
   const double kSdpaProb;
   static constexpr double kSdpaScale = 1e-3;

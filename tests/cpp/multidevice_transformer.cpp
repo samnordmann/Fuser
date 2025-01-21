@@ -103,18 +103,30 @@ MlpResult DistributedTransformer::mlp(
     bool sequence_parallel) {
   const DataType dtype = w0->dtype();
 
-  if (sequence_parallel) {
+  assert(O > 0);
+  if (sequence_parallel && O == 0) {
     // Input arrives sharded and must be allgathered back
     x->setDeviceMesh(mesh);
-    x->axis(0)->parallelize(ParallelType::DIDx);
+    x->axis(1)->parallelize(ParallelType::DIDx);
     x = set(x); // allgather
     x->axis(0)->parallelize(ParallelType::Serial);
     // Reshape back to 2D. This is uncessary except to keep
     // the shapes of linear0 the same for TP and TP+SP.
     x = reshape(x, {D, B * S / D, E}, {B * S, E});
   }
+  if (sequence_parallel && O > 0) {
+    // Input arrives sharded and must be allgathered back
+    x->setDeviceMesh(mesh);
+    x->axis(1)->parallelize(ParallelType::DIDx);
+    // x = reshape(x, {O, D, B * S / (D * O) , E}, {B * S, E});
+  }
   // Linear 0
   TensorView* linear0 = linear(x, w0, b0);
+  if (sequence_parallel && O > 0) {
+    linear0->setDeviceMesh(mesh);
+    linear0->axis(0)->parallelize(ParallelType::Stream);
+    std::cout<< linear0 << std::endl;
+  }
   // GeLU
   TensorView* gelu = tanh_gelu(castOp(DataType::Float, linear0));
   gelu = castOp(dtype, gelu);
@@ -123,7 +135,7 @@ MlpResult DistributedTransformer::mlp(
   if (sequence_parallel) {
     // Remove after https://github.com/NVIDIA/Fuser/issues/2563
     // Reshape to explicitly pull the sharded axis into the logical domain
-    local_matmul1 = reshape(local_matmul1, {D, B * S, E}, {D, D, B * S / D, E});
+    // local_matmul1 = reshape(local_matmul1, {D, B * S, E}, {D, D, B * S / D, E});
   }
   TensorView* matmul1 = sum(local_matmul1, {0}); // Allreduce or Reduce scatter
   std::vector<bool> bcast_mask(matmul1->nDims() - 1, true);

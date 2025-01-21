@@ -354,13 +354,10 @@ bool HostIrLower::canLower(Expr* expr, bool ignore_inner_resharding) {
     // are fully replicated, a is sharded on axis 1, and out i
     // stream-parallelized on axis 0.
     auto* a = linear->inA()->as<TensorView>();
-    auto* b = linear->inB()->as<TensorView>();
-    auto* bias = linear->bias()->as<TensorView>();
-    ;
+    // auto* b = linear->inB()->as<TensorView>();
+    // auto* bias = linear->bias()->as<TensorView>();
     auto* out = linear->out()->as<TensorView>();
-    ;
-    return !isSharded(b) && !(linear->has_bias() && isSharded(bias)) &&
-        !isSharded(out) &&
+    return 
         a->axis(0)->getParallelType() == ParallelType::Serial &&
         getShardedLogicalAxis(a, ParallelType::DIDx) == 1 &&
         out->axis(0)->getParallelType() == ParallelType::Stream;
@@ -388,20 +385,20 @@ std::vector<Expr*> HostIrLower::lowerToCollectiveBasedPipelinedGemmComm(
     tvb = linear->inB()->as<TensorView>();
     tv_bias = linear->bias()->as<TensorView>();
     tv_out = linear->out()->as<TensorView>();
-    NVF_ERROR(
-        !(linear->has_bias() && isSharded(tv_bias)),
-        "The bias ",
-        tv_bias,
-        " is expected to not be sharded");
+    // NVF_ERROR(
+    //     !(linear->has_bias() && isSharded(tv_bias)),
+    //     "The bias ",
+    //     tv_bias,
+    //     " is expected to not be sharded");
   }
 
-  NVF_ERROR(
-      !isSharded(tvb), "The B operand ", tvb, " is expected to not be sharded");
-  NVF_ERROR(
-      !isSharded(tv_out),
-      "The output ",
-      tv_out,
-      " is expected to not be sharded");
+  // NVF_ERROR(
+  //     !isSharded(tvb), "The B operand ", tvb, " is expected to not be sharded");
+  // NVF_ERROR(
+  //     !isSharded(tv_out),
+  //     "The output ",
+  //     tv_out,
+  //     " is expected to not be sharded");
   NVF_ERROR(
       tv_out->axis(0)->getParallelType() == ParallelType::Stream,
       "The output ",
